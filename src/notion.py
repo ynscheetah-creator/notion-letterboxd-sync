@@ -67,32 +67,55 @@ NEED_KEYS = (
 )
 
 def iter_pages_needing_fill(limit=200):
-    """Letterboxd linki olan ve alanlarından bazıları boş olan sayfaları getirir."""
-    # Basit query: Letterboxd dolu olanları çekelim
-    resp = client.databases.query(
-        **{
-            "database_id": NOTION_DATABASE_ID,
-            "page_size": limit,
-            # İstersen burada filtreyi genişletebilirsin
-        }
-    )
+    """
+    Letterboxd linki olan ve hedef alanlarından en az biri boş olan sayfaları döndürür.
+    Tüm veritabanını taramak için sayfalama (start_cursor) kullanır.
+    """
+    page_size = 100  # Notion maksimumu
+    start_cursor = None
     results = []
-    for page in resp.get("results", []):
-        props = page["properties"]
-        # Letterboxd varsa aday
-        lb = read_prop(props, NOTION_COLS["letterboxd"])
-        if not lb:
-            continue
-        # en az bir ihtiyaç boş mu?
-        need_any = False
-        for k in NEED_KEYS:
-            if NOTION_COLS.get(k) in props:
-                v = read_prop(props, NOTION_COLS[k])
-                if v in (None, "", [], 0) and k not in ("year","runtime"):  # sayı alanı 0 olabilir
-                    need_any = True
-                    break
-        if need_any:
-            results.append(page)
+
+    while True:
+        payload = {
+            "database_id": NOTION_DATABASE_ID,
+            "page_size": page_size,
+        }
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+
+        resp = client.databases.query(**payload)
+        pages = resp.get("results", [])
+        start_cursor = resp.get("next_cursor")
+        has_more = resp.get("has_more", False)
+
+        for page in pages:
+            props = page["properties"]
+            lb = read_prop(props, NOTION_COLS["letterboxd"])
+            if not lb:
+                continue
+
+            # En az bir hedef alan boş mu?
+            need_any = False
+            for k in NEED_KEYS:
+                if NOTION_COLS.get(k) in props:
+                    v = read_prop(props, NOTION_COLS[k])
+                    # sayısal alanlar için 0'ı boş sayma
+                    if k in ("year", "runtime"):
+                        if v is None:
+                            need_any = True
+                            break
+                    else:
+                        if v in (None, "", []):
+                            need_any = True
+                            break
+            if need_any:
+                results.append(page)
+                if limit and len(results) >= limit:
+                    return results
+
+        if not has_more:
+            break
+
     return results
 
 def update_page(page_id: str, data: dict):
