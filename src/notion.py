@@ -1,72 +1,131 @@
-from typing import Dict, Any, List, Optional
 from notion_client import Client
 from .config import NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_COLS
 
-client = Client(auth=NOTION_TOKEN)
+# ---------- helpers ----------
 
-def iter_pages_needing_fill(limit: int = 100) -> List[Dict[str, Any]]:
-    db_id = NOTION_DATABASE_ID
-    prop = NOTION_COLS
+def _txt(v: str):
+    if v is None or v == "":
+        return {"rich_text": []}
+    # Notion property rich_text için basit text obje
+    return {"rich_text": [{"type": "text", "text": {"content": str(v)[:2000]}}]}
 
-    # Query pages where Letterboxd URL exists
-    has_url_filter = {
-        "property": prop["letterboxd"],
-        "url": {"is_not_empty": True}
-    }
+def _url(v: str):
+    return {"url": (v or None)}
 
-    # We don't set complex "any empty" filter, just fetch and filter in Python
-    results = []
-    cursor = None
-    while True:
-        resp = client.databases.query(
-            **({"start_cursor": cursor} if cursor else {}),
-            database_id=db_id,
-            page_size=min(100, limit - len(results)),
-            filter=has_url_filter,
-            sorts=[{"property": prop["title"], "direction": "ascending"}]
-        )
-        results.extend(resp["results"])
-        cursor = resp.get("next_cursor")
-        if not cursor or len(results) >= limit:
-            break
-    return results
+def _num(v):
+    if v is None or v == "":
+        return {"number": None}
+    try:
+        return {"number": int(v)}
+    except Exception:
+        try:
+            return {"number": float(v)}
+        except Exception:
+            return {"number": None}
 
-def read_prop(props: Dict[str, Any], name: str) -> Any:
-    p = props.get(name)
-    if not p:
+def _multi(vals):
+    if not vals:
+        return {"multi_select": []}
+    return {"multi_select": [{"name": str(x)} for x in vals if str(x).strip()]}
+
+def _title(v: str):
+    if v is None or v == "":
+        return {"title": []}
+    return {"title": [{"type": "text", "text": {"content": str(v)[:200]}}]}
+
+def read_prop(props, name):
+    """Notion property değerini Python tipine çevir."""
+    if name not in props:
         return None
-    t = p["type"]
+    p = props[name]
+    t = p.get("type")
     if t == "title":
-        return "".join([x["plain_text"] for x in p["title"]])
-    if t == "url":
-        return p["url"]
-    if t == "number":
-        return p["number"]
+        arr = p["title"]
+        return arr[0]["plain_text"] if arr else None
     if t == "rich_text":
-        return "".join([x["plain_text"] for x in p["rich_text"]])
+        arr = p["rich_text"]
+        return "".join([x["plain_text"] for x in arr]) if arr else None
+    if t == "number":
+        return p.get("number")
+    if t == "url":
+        return p.get("url")
+    if t == "multi_select":
+        return [x["name"] for x in p.get("multi_select", [])]
+    if t == "date":
+        d = p.get("date")
+        return d.get("start") if d else None
     return None
 
-def update_page(page_id: str, data: Dict[str, Any]):
-    prop = NOTION_COLS
-    payload = {"properties": {}}
+# ---------- client ----------
 
-    if "year" in data and data["year"] is not None:
-        payload["properties"][prop["year"]] = {"number": int(data["year"])}
+client = Client(auth=NOTION_TOKEN)
 
-    if "runtime" in data and data["runtime"] is not None:
-        payload["properties"][prop["runtime"]] = {"number": int(data["runtime"])}
+# Bu alanlardan biri boşsa doldurmaya aday sayılır
+NEED_KEYS = (
+    "year","director","writer","cinematography","runtime","poster",
+    "original_title","synopsis","countries","languages","cast_top","backdrop","trailer_url"
+)
 
-    if "director" in data and data["director"]:
-        payload["properties"][prop["director"]] = {"rich_text": [{"text": {"content": data["director"]}}]}
+def iter_pages_needing_fill(limit=200):
+    """Letterboxd linki olan ve alanlarından bazıları boş olan sayfaları getirir."""
+    # Basit query: Letterboxd dolu olanları çekelim
+    resp = client.databases.query(
+        **{
+            "database_id": NOTION_DATABASE_ID,
+            "page_size": limit,
+            # İstersen burada filtreyi genişletebilirsin
+        }
+    )
+    results = []
+    for page in resp.get("results", []):
+        props = page["properties"]
+        # Letterboxd varsa aday
+        lb = read_prop(props, NOTION_COLS["letterboxd"])
+        if not lb:
+            continue
+        # en az bir ihtiyaç boş mu?
+        need_any = False
+        for k in NEED_KEYS:
+            if NOTION_COLS.get(k) in props:
+                v = read_prop(props, NOTION_COLS[k])
+                if v in (None, "", [], 0) and k not in ("year","runtime"):  # sayı alanı 0 olabilir
+                    need_any = True
+                    break
+        if need_any:
+            results.append(page)
+    return results
 
-    if "writer" in data and data["writer"]:
-        payload["properties"][prop["writer"]] = {"rich_text": [{"text": {"content": data["writer"]}}]}
+def update_page(page_id: str, data: dict):
+    """Python dict -> Notion property payload dönüşümü ve update."""
+    props = {}
 
-    if "cinematography" in data and data["cinematography"]:
-        payload["properties"][prop["cinematography"]] = {"rich_text": [{"text": {"content": data["cinematography"]}}]}
+    # Text / Rich text
+    text_keys = (
+        "director","writer","cinematography",
+        "original_title","synopsis","cast_top"
+    )
+    for k in text_keys:
+        if k in data and NOTION_COLS.get(k):
+            props[NOTION_COLS[k]] = _txt(data[k])
 
-    if "poster" in data and data["poster"]:
-        payload["properties"][prop["poster"]] = {"url": data["poster"]}
+    # Numbers
+    if "year" in data and NOTION_COLS.get("year"):
+        props[NOTION_COLS["year"]] = _num(data["year"])
+    if "runtime" in data and NOTION_COLS.get("runtime"):
+        props[NOTION_COLS["runtime"]] = _num(data["runtime"])
 
-    if payload["properties"]:
-        client.pages.update(page_id=page_id, **payload)
+    # URLs
+    for k in ("poster","backdrop","trailer_url"):
+        if k in data and NOTION_COLS.get(k):
+            props[NOTION_COLS[k]] = _url(data[k])
+
+    # Multi-selects
+    if "countries" in data and NOTION_COLS.get("countries"):
+        props[NOTION_COLS["countries"]] = _multi(data["countries"])
+    if "languages" in data and NOTION_COLS.get("languages"):
+        props[NOTION_COLS["languages"]] = _multi(data["languages"])
+
+    if not props:
+        return
+
+    client.pages.update(page_id=page_id, properties=props)
