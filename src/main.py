@@ -1,4 +1,4 @@
-import os, argparse
+import argparse
 from dotenv import load_dotenv
 from .config import NOTION_COLS, DEFAULT_LIMIT
 from . import notion as nz
@@ -9,11 +9,10 @@ from . import tmdb
 def is_empty(val):
     return val is None or (isinstance(val, str) and not val.strip())
 
-def compose_update(existing, fetched):
-    # Do not overwrite existing unless --overwrite
+def compose_update(existing_props, fetched):
     out = {}
     for key in ("year", "runtime", "director", "writer", "cinematography", "poster"):
-        if fetched.get(key) is not None:
+        if fetched.get(key) is not None and fetched.get(key) != "":
             out[key] = fetched[key]
     return out
 
@@ -35,11 +34,9 @@ def main():
         url = nz.read_prop(props, prop["letterboxd"])
         title = nz.read_prop(props, prop["title"])
 
-        # determine if update needed
         need_any = any(is_empty(nz.read_prop(props, prop[k])) for k in ("year","director","writer","cinematography","runtime","poster"))
         if not need_any and not args.overwrite:
             continue
-
         if not url:
             continue
 
@@ -50,13 +47,22 @@ def main():
             continue
 
         fetched = {}
+
+        # 1) IMDb ile OMDb
         if ids.get("imdb_id"):
             data = omdb.get_by_imdb(ids["imdb_id"])
             if data:
                 fetched = data
-        # Fallback to TMDb
-        if not fetched:
-            data = tmdb.get_by_imdb(ids.get("imdb_id", "")) if ids.get("imdb_id") else None
+
+        # 2) IMDb ile TMDb (OMDb olmazsa)
+        if not fetched and ids.get("imdb_id"):
+            data = tmdb.get_by_imdb(ids["imdb_id"])
+            if data:
+                fetched = data
+
+        # 3) IMDb yoksa: başlık + yıl ile OMDb
+        if not fetched and (ids.get("title") or ids.get("year")):
+            data = omdb.get_by_title(ids.get("title"), ids.get("year"))
             if data:
                 fetched = data
 
