@@ -1,16 +1,18 @@
 # src/notion.py
 from __future__ import annotations
 
-from notion_client import Client
 from typing import Any, Dict, List, Optional
+from notion_client import Client
 
 from .config import NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_COLS
 
+# -----------------------------
 # Notion client
+# -----------------------------
 client = Client(auth=NOTION_TOKEN)
 
 # -----------------------------
-# Helpers: Notion value builders
+# Builders (Notion property payload helpers)
 # -----------------------------
 def _txt(val: Optional[str]) -> Dict[str, Any]:
     if val is None:
@@ -33,7 +35,7 @@ def _url(val: Optional[str]) -> Dict[str, Any]:
     return {"url": (str(val) if val else None)}
 
 def _multi(items: Optional[List[str]]) -> Dict[str, Any]:
-    arr = []
+    arr: List[Dict[str, str]] = []
     if items:
         for it in items:
             name = str(it).strip()
@@ -50,7 +52,7 @@ def _as_list(x: Any) -> List[str]:
     return [p.strip() for p in str(x).split(",") if p.strip()]
 
 # -----------------------------
-# Read helpers
+# Readers
 # -----------------------------
 def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
     """Notion property'yi sade Python değerine çevir."""
@@ -61,9 +63,9 @@ def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
     ptype = prop.get("type")
 
     if ptype == "title":
-        return "".join([t.get("plain_text", "") for t in prop.get("title", [])]).strip()
+        return "".join(t.get("plain_text", "") for t in prop.get("title", [])).strip()
     if ptype == "rich_text":
-        return "".join([t.get("plain_text", "") for t in prop.get("rich_text", [])]).strip()
+        return "".join(t.get("plain_text", "") for t in prop.get("rich_text", [])).strip()
     if ptype == "number":
         return prop.get("number")
     if ptype == "url":
@@ -80,8 +82,26 @@ def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
         if f0.get("type") == "file":
             return f0.get("file", {}).get("url")
         return None
+    return None
 
-    # Other types ignored
+def get_page_title(props: Dict[str, Any]) -> Optional[str]:
+    """
+    NOTION_COLS['name'] yanlış/boş olsa bile title tipindeki property'den başlık döndürür.
+    """
+    # 1) Mapping ile
+    name_col = NOTION_COLS.get("name")
+    if name_col and name_col in props and props[name_col].get("type") == "title":
+        s = "".join(t.get("plain_text", "") for t in props[name_col].get("title", []))
+        s = s.strip()
+        if s:
+            return s
+    # 2) Tüm property'lerde type=title ara
+    for p in props.values():
+        if p.get("type") == "title":
+            s = "".join(t.get("plain_text", "") for t in p.get("title", []))
+            s = s.strip()
+            if s:
+                return s
     return None
 
 # -----------------------------
@@ -98,8 +118,8 @@ def update_cover(page_id: str, url: Optional[str]) -> None:
 def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, Any] | None = None) -> None:
     """
     Python dict -> Notion properties + cover.
-    Bu sürüm Director / Writer / Cinematography / Cast Top 3 / Countries / Languages
-    alanlarını **multi-select** olarak yazar. Poster / Backdrop / Trailer URL ise **URL**'dür.
+    Director / Writer / Cinematography / Cast Top 3 / Countries / Languages: multi-select
+    Poster / Backdrop / Trailer URL: URL
     """
     props: Dict[str, Any] = {}
 
