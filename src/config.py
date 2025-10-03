@@ -1,6 +1,10 @@
 import os
 
-# Notion column mapping (Notion'daki adlarla birebir aynı olmalı)
+# --- Notion kimlikleri (GitHub Secrets'tan geliyor) ---
+NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
+NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "")
+
+# --- Notion sütun eşlemesi (Notion’daki adlarla birebir aynı olmalı) ---
 NOTION_COLS = {
     "title": "Name",
     "letterboxd": "Letterboxd",
@@ -11,7 +15,7 @@ NOTION_COLS = {
     "runtime": "Runtime (min)",
     "poster": "Poster",
 
-    # Eklediğimiz alanlar
+    # Ek alanlar
     "original_title": "Original Title",
     "synopsis": "Synopsis",
     "countries": "Countries",
@@ -21,9 +25,9 @@ NOTION_COLS = {
     "trailer_url": "Trailer URL",
 }
 
-# Varsayılan kaç sayfa işlenecek (main.py bunu import ediyor)
+# Varsayılan limit (main.py import ediyor)
 DEFAULT_LIMIT = int(os.getenv("DEFAULT_LIMIT", "200"))
 
-# API anahtarları (GitHub Secrets'tan geliyor)
+# API anahtarları (GitHub Secrets)
 OMDB_API_KEY = os.getenv("OMDB_API_KEY", "")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
