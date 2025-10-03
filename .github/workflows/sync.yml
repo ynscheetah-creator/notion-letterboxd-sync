@@ -7,6 +7,11 @@ on:
     # Türkiye saati 23:00 (UTC 20:00)
     - cron: "0 20 * * *"
   workflow_dispatch:
+    inputs:
+      set_covers:
+        description: "Backdrop URL'leri cover olarak ayarla (tek seferlik)"
+        required: false
+        default: "false"
 
 jobs:
   sync:
@@ -26,11 +31,17 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Run sync (fill missing only)
+      - name: Run sync
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
-          python -m src.main
+          if [ "${{ github.event.inputs.set_covers }}" == "true" ]; then
+            echo "Running with --set-covers"
+            python -m src.main --set-covers
+          else
+            echo "Running normal sync"
+            python -m src.main
+          fi
