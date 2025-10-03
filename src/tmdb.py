@@ -1,60 +1,61 @@
-import requests, logging
-from .config import OMDB_API_KEY
+import requests
+from .config import TMDB_API_KEY
 
-BASE = "http://www.omdbapi.com/"
+TMDB_BASE = "https://api.themoviedb.org/3"
+
+def _headers():
+    # v4 bearer varsa onu kullan; yoksa v3 api_key querystring
+    return {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY and len(TMDB_API_KEY) > 40 else None
 
 def get_by_imdb(imdb_id: str):
-    if not OMDB_API_KEY or not imdb_id:
+    if not TMDB_API_KEY or not imdb_id:
         return None
-    params = {"apikey": OMDB_API_KEY, "i": imdb_id, "plot": "short", "r": "json"}
-    r = requests.get(BASE, params=params, timeout=20)
+    h = _headers()
+    if not h:
+        url = f"{TMDB_BASE}/find/{imdb_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
+        r = requests.get(url, timeout=20)
+    else:
+        url = f"{TMDB_BASE}/find/{imdb_id}?external_source=imdb_id"
+        r = requests.get(url, headers=h, timeout=20)
     if r.status_code != 200:
         return None
     data = r.json()
-    if data.get("Response") != "True":
+    results = data.get("movie_results") or []
+    if not results:
         return None
-    out = {
-        "title": data.get("Title"),
-        "year": int(data["Year"].split("–")[0]) if data.get("Year") else None,
-        "runtime": None,
-        "director": data.get("Director"),
-        "writer": data.get("Writer"),
-        "poster": data.get("Poster") if data.get("Poster") and data["Poster"] != "N/A" else None,
-        "cinematography": None,  # OMDb sinematograf vermez
-    }
-    rt = data.get("Runtime")  # "123 min"
-    if rt and rt.endswith("min"):
-        try:
-            out["runtime"] = int(rt.split()[0])
-        except Exception:
-            pass
-    return out
+    movie = results[0]
+    movie_id = movie["id"]
 
-def get_by_title(title: str, year: int | None = None):
-    if not OMDB_API_KEY or not title:
-        return None
-    params = {"apikey": OMDB_API_KEY, "t": title, "plot": "short", "r": "json"}
-    if year:
-        params["y"] = str(year)
-    r = requests.get(BASE, params=params, timeout=20)
-    if r.status_code != 200:
-        return None
-    data = r.json()
-    if data.get("Response") != "True":
-        return None
+    # Credits → yönetmen, yazar, görüntü yönetmeni
+    if not h:
+        cred = requests.get(f"{TMDB_BASE}/movie/{movie_id}/credits?api_key={TMDB_API_KEY}", timeout=20).json()
+    else:
+        cred = requests.get(f"{TMDB_BASE}/movie/{movie_id}/credits", headers=h, timeout=20).json()
+    crew = cred.get("crew", [])
+    director = ", ".join([c["name"] for c in crew if c.get("job") == "Director"]) or None
+    writer = ", ".join([c["name"] for c in crew if c.get("job") in ("Writer", "Screenplay", "Author")]) or None
+    dops = [c["name"] for c in crew if c.get("job") in ("Director of Photography", "Cinematography")]
+    cinematography = ", ".join(dops) if dops else None
+
+    poster = None
+    if movie.get("poster_path"):
+        poster = f"https://image.tmdb.org/t/p/w500{movie['poster_path']}"
+
     out = {
-        "title": data.get("Title"),
-        "year": int(data["Year"].split("–")[0]) if data.get("Year") else None,
+        "title": movie.get("title"),
+        "year": int(movie["release_date"][:4]) if movie.get("release_date") else None,
         "runtime": None,
-        "director": data.get("Director"),
-        "writer": data.get("Writer"),
-        "poster": data.get("Poster") if data.get("Poster") and data["Poster"] != "N/A" else None,
-        "cinematography": None,
+        "director": director,
+        "writer": writer,
+        "cinematography": cinematography,
+        "poster": poster,
     }
-    rt = data.get("Runtime")
-    if rt and rt.endswith("min"):
-        try:
-            out["runtime"] = int(rt.split()[0])
-        except Exception:
-            pass
+    # Detay çağrısı ile runtime
+    if not h:
+        det = requests.get(f"{TMDB_BASE}/movie/{movie_id}?api_key={TMDB_API_KEY}", timeout=20).json()
+    else:
+        det = requests.get(f"{TMDB_BASE}/movie/{movie_id}", headers=h, timeout=20).json()
+    rt = det.get("runtime")
+    if rt:
+        out["runtime"] = int(rt)
     return out
