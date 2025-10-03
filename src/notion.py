@@ -1,5 +1,7 @@
 from notion_client import Client
 from .config import NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_COLS
+import time
+from notion_client.errors import APIResponseError
 
 # ---------- value helpers ----------
 
@@ -91,10 +93,6 @@ def iter_pages_needing_fill(limit=200):
 def update_page(page_id: str, data: dict):
     props = {}
 
-    # title güncellemek istersen (şimdilik pas)
-    # if "title" in data and NOTION_COLS.get("title"):
-    #     props[NOTION_COLS["title"]] = _title(data["title"])
-
     # text alanlar
     for k in ("director","writer","cinematography","original_title","synopsis","cast_top"):
         if k in data and NOTION_COLS.get(k):
@@ -117,5 +115,19 @@ def update_page(page_id: str, data: dict):
     if "languages" in data and NOTION_COLS.get("languages"):
         props[NOTION_COLS["languages"]] = _multi(data["languages"])
 
-    if props:
-        client.pages.update(page_id=page_id, properties=props)
+    if not props:
+        return
+
+    # --- 409 Conflict için exponential retry ---
+    delay = 0.5
+    for attempt in range(5):
+        try:
+            client.pages.update(page_id=page_id, properties=props)
+            return
+        except APIResponseError as e:
+            status = getattr(e, "status", None)
+            if status == 409 or "Conflict" in str(e):
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise
