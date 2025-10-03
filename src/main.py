@@ -45,8 +45,8 @@ def main():
     prop = NOTION_COLS
     updated = 0
 
-    for idx, page in enumerate(rows, start=1):
-        time.sleep(0.2)  # rate-limit kalkanı
+for idx, page in enumerate(rows, start=1):
+    time.sleep(0.5)  # ~2 istek/sn, Notion için güvenli
 
         pid = page["id"]
         props = page["properties"]
