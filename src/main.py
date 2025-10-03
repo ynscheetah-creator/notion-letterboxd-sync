@@ -32,42 +32,57 @@ def main():
         pid = page["id"]
         props = page["properties"]
         url = nz.read_prop(props, prop["letterboxd"])
-        title = nz.read_prop(props, prop["title"])
+        title_notion = nz.read_prop(props, prop["title"])
+        year_notion = nz.read_prop(props, prop["year"])
 
         need_any = any(is_empty(nz.read_prop(props, prop[k])) for k in ("year","director","writer","cinematography","runtime","poster"))
         if not need_any and not args.overwrite:
             continue
-        if not url:
+        if not url and not title_notion:
             continue
 
         try:
-            ids = lb.extract_ids(url)
+            ids = lb.extract_ids(url) if url else {"title": None, "year": None, "imdb_id": None}
         except Exception as e:
-            print(f"[skip] {title}: letterboxd error: {e}")
-            continue
+            print(f"[skip] {title_notion or url}: letterboxd error: {e}")
+            ids = {"title": None, "year": None, "imdb_id": None}
 
         fetched = {}
 
-        # 1) IMDb ile OMDb
-        if ids.get("imdb_id"):
-            data = omdb.get_by_imdb(ids["imdb_id"])
+        imdb_from_lb = ids.get("imdb_id")
+        title_from_lb = ids.get("title")
+        year_from_lb  = ids.get("year")
+
+        try:
+            year_notion = int(year_notion) if year_notion is not None else None
+        except Exception:
+            year_notion = None
+
+        # 1) IMDb -> OMDb
+        if imdb_from_lb:
+            data = omdb.get_by_imdb(imdb_from_lb)
             if data:
                 fetched = data
 
-        # 2) IMDb ile TMDb (OMDb olmazsa)
-        if not fetched and ids.get("imdb_id"):
-            data = tmdb.get_by_imdb(ids["imdb_id"])
+        # 2) IMDb -> TMDb
+        if not fetched and imdb_from_lb:
+            data = tmdb.get_by_imdb(imdb_from_lb)
             if data:
                 fetched = data
 
-        # 3) IMDb yoksa: başlık + yıl ile OMDb
-        if not fetched and (ids.get("title") or ids.get("year")):
-            data = omdb.get_by_title(ids.get("title"), ids.get("year"))
+        # 3) Başlık+yıl -> OMDb (önce LB, sonra Notion)
+        if not fetched and (title_from_lb or year_from_lb):
+            data = omdb.get_by_title(title_from_lb or "", year_from_lb)
+            if data:
+                fetched = data
+
+        if not fetched and title_notion:
+            data = omdb.get_by_title(title_notion, year_notion)
             if data:
                 fetched = data
 
         if not fetched:
-            print(f"[skip] {title}: no data found for {url}")
+            print(f"[skip] {title_notion or url}: no data found")
             continue
 
         payload = compose_update(props, fetched)
@@ -75,10 +90,10 @@ def main():
             continue
 
         if args.dry_run:
-            print(f"[dry] Would update {title}: {payload}")
+            print(f"[dry] Would update {title_notion or url}: {payload}")
         else:
             nz.update_page(pid, payload)
-            print(f"[ok] Updated {title}: {payload}")
+            print(f"[ok] Updated {title_notion or url}: {payload}")
             updated += 1
 
     print(f"Done. Updated {updated} pages.")
