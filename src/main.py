@@ -1,5 +1,7 @@
 import argparse
+import time
 from dotenv import load_dotenv
+
 from .config import NOTION_COLS, DEFAULT_LIMIT
 from . import notion as nz
 from . import letterboxd as lb
@@ -12,7 +14,12 @@ def is_empty(val):
 
 
 def compose_update(existing_props, fetched):
+    """
+    TMDb/OMDb'den gelen veriyi Notion property payload'ına uygun
+    sade bir dict'e dönüştürür. (Gerçek dönüşüm notion.py'de yapılır.)
+    """
     out = {}
+    # Düz metin / sayı / url alanlar
     simple_keys = (
         "year", "runtime", "director", "writer", "cinematography",
         "poster", "original_title", "synopsis", "cast_top", "backdrop", "trailer_url"
@@ -20,19 +27,23 @@ def compose_update(existing_props, fetched):
     for key in simple_keys:
         if fetched.get(key) not in (None, ""):
             out[key] = fetched[key]
+
+    # Multi-select alanlar
     if fetched.get("countries"):
         out["countries"] = fetched["countries"]
     if fetched.get("languages"):
         out["languages"] = fetched["languages"]
+
     return out
 
 
 def main():
     load_dotenv()
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="işlenecek maksimum sayfa (0=limitsiz)")
+    ap.add_argument("--dry-run", action="store_true", help="Notion'a yazmadan sadece ne olacağını göster")
+    ap.add_argument("--overwrite", action="store_true", help="dolu alanları da tazeler")
     args = ap.parse_args()
 
     print("[debug] starting...", flush=True)
@@ -43,15 +54,22 @@ def main():
     updated = 0
 
     for idx, page in enumerate(rows, start=1):
+        # --- RATE LIMIT KALKANI ---
+        time.sleep(0.2)  # ~5 istek/sn; gerekirse 0.5'e çıkarabilirsin
+
         pid = page["id"]
         props = page["properties"]
+
         url = nz.read_prop(props, prop["letterboxd"])
         name = nz.read_prop(props, prop["title"])
         year0 = nz.read_prop(props, prop["year"])
 
         needs = {
             k: is_empty(nz.read_prop(props, prop[k]))
-            for k in ("year", "director", "writer", "cinematography", "runtime", "poster")
+            for k in ("year", "director", "writer", "cinematography", "runtime",
+                      "poster", "original_title", "synopsis", "countries",
+                      "languages", "cast_top", "backdrop", "trailer_url")
+            if k in prop
         }
         print(f"[debug] row {idx}: name={name!r} url={url!r} needs={needs}", flush=True)
 
@@ -59,6 +77,7 @@ def main():
         if not need_any and not args.overwrite:
             continue
 
+        # ---- Başlık/Yıl kestirimi ----
         title_guess = None
         year_guess = None
 
@@ -69,7 +88,7 @@ def main():
                 title_guess = ids.get("title") or title_guess
                 year_guess = ids.get("year") or year_guess
             except Exception as e:
-                print(f"[debug] lb error: {e}", flush=True)
+                print(f"[debug] letterboxd redirect error: {e}", flush=True)
 
         # 2) Notion Name/Year fallback
         if not title_guess and name:
@@ -84,14 +103,15 @@ def main():
             print(f"[debug] row {idx}: no title to query", flush=True)
             continue
 
+        # ---- Veri çekme (önce OMDb, olmazsa TMDb) ----
         fetched = None
 
-        # 3) Önce OMDb dene
+        # OMDb (çoğu zaman yeterli, ama limit/başlık eşleşmesi şaşabiliyor)
         fetched = omdb.get_by_title(title_guess, year_guess)
         if not fetched:
             print(f"[debug] OMDb miss for {title_guess!r} ({year_guess})", flush=True)
 
-        # 4) Olmazsa TMDb dene
+        # TMDb (daha güçlü arama + ekstra alanlar: synopsis, cast top, backdrop, trailer vs.)
         if not fetched:
             fetched = tmdb.get_by_title(title_guess, year_guess)
             if not fetched:
