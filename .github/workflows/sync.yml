@@ -1,9 +1,9 @@
 name: Sync Notion from Letterboxd
 
 on:
-  workflow_dispatch:        # Elle çalıştır
+  workflow_dispatch:        # Elle çalıştırma
   schedule:
-    - cron: '0 3 * * *'     # Her gün 03:00 UTC (TR = 06:00)
+    - cron: '0 3 * * *'     # Her gün 03:00 UTC (TR=06:00)
 
 jobs:
   run:
@@ -30,4 +30,4 @@ jobs:
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
-          python -m src.main --dry-run --limit 10
+          python -m src.main
