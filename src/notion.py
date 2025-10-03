@@ -116,32 +116,52 @@ def iter_pages_needing_fill(limit=200):
     return results
 
 def update_page(page_id: str, data: dict):
+    """Python dict -> Notion property payload dönüşümü ve update."""
     props = {}
 
-    # text alanlar
-    for k in ("director","writer","cinematography","original_title","synopsis","cast_top"):
+    # ---- Text alanları ----
+    text_keys = (
+        "director","writer","cinematography",
+        "original_title","synopsis","cast_top"
+    )
+    for k in text_keys:
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _txt(data[k])
 
-    # sayılar
+    # ---- Number alanları ----
     if "year" in data and NOTION_COLS.get("year"):
         props[NOTION_COLS["year"]] = _num(data["year"])
     if "runtime" in data and NOTION_COLS.get("runtime"):
         props[NOTION_COLS["runtime"]] = _num(data["runtime"])
 
-    # url alanlar
+    # ---- URL alanları ----
     for k in ("poster","backdrop","trailer_url"):
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _url(data[k])
 
-    # multi-select
+    # ---- Multi-select alanları ----
     if "countries" in data and NOTION_COLS.get("countries"):
         props[NOTION_COLS["countries"]] = _multi(data["countries"])
     if "languages" in data and NOTION_COLS.get("languages"):
         props[NOTION_COLS["languages"]] = _multi(data["languages"])
 
-    if not props:
-        return
+    # ---- COVER: Backdrop varsa sayfanın kapak görseli yap ----
+    cover_payload = None
+    if data.get("backdrop"):
+        cover_payload = {
+            "type": "external",
+            "external": {"url": data["backdrop"]}
+        }
+
+    # ---- Notion update çağrısı ----
+    kwargs = {"page_id": page_id}
+    if props:
+        kwargs["properties"] = props
+    if cover_payload:
+        kwargs["cover"] = cover_payload
+
+    if len(kwargs) > 1:  # en az properties veya cover var
+        client.pages.update(**kwargs)
 
     # --- 409 Conflict için exponential retry ---
     delay = 0.5
