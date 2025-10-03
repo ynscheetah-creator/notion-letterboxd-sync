@@ -1,35 +1,36 @@
-name: Notion × Letterboxd Sync   # Workflow adı listede bu görünecek
+name: Fill missing fields
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *'
-
-concurrency:
-  group: notion-sync
-  cancel-in-progress: true   # Aynı anda birden fazla koşuyu engeller
+    # Türkiye saati 08:00 (UTC 05:00)
+    - cron: "0 5 * * *"
+    # Türkiye saati 23:00 (UTC 20:00)
+    - cron: "0 20 * * *"
+  workflow_dispatch:
 
 jobs:
-  sync_run:                  # job id
-    name: Fill missing fields  # job adı, listede 'sync_run' yerine bu görünür
+  sync:
+    name: Fill missing fields
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+
       - name: Install deps
         run: |
-          pip install --upgrade pip
           pip install -r requirements.txt
+
       - name: Run sync (fill missing only)
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          DEFAULT_LIMIT: "0"
         run: |
           python -m src.main
