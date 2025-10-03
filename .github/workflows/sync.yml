@@ -1,14 +1,13 @@
 name: Sync Notion from Letterboxd
 
 on:
-  workflow_dispatch:        # Elle çalıştırma
+  workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *'     # Her gün 03:00 UTC (TR=06:00)
+    - cron: '0 3 * * *'   # her gün 03:00 UTC
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -23,7 +22,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-          - name: Run
+      - name: Run
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
