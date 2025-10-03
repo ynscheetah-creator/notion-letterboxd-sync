@@ -1,10 +1,10 @@
 import os
 
-# --- Notion kimlikleri (GitHub Secrets'tan geliyor) ---
+# --- Notion kimlikleri (GitHub Secrets) ---
 NOTION_TOKEN = os.getenv("NOTION_TOKEN", "")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "")
 
-# --- Notion sütun eşlemesi (Notion’daki adlarla birebir aynı olmalı) ---
+# --- Notion sütun eşlemesi (adlar Notion’dakiyle birebir aynı olmalı) ---
 NOTION_COLS = {
     "title": "Name",
     "letterboxd": "Letterboxd",
@@ -15,7 +15,7 @@ NOTION_COLS = {
     "runtime": "Runtime (min)",
     "poster": "Poster",
 
-    # Ek alanlar
+    # Ek alanlar (istediğin paket)
     "original_title": "Original Title",
     "synopsis": "Synopsis",
     "countries": "Countries",
@@ -25,9 +25,9 @@ NOTION_COLS = {
     "trailer_url": "Trailer URL",
 }
 
-# Varsayılan limit (main.py import ediyor)
+# Varsayılan limit (0 ya da hiç verilmezse sınırsız)
 DEFAULT_LIMIT = int(os.getenv("DEFAULT_LIMIT", "200"))
 
-# API anahtarları (GitHub Secrets)
+# API anahtarları
 OMDB_API_KEY = os.getenv("OMDB_API_KEY", "")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
