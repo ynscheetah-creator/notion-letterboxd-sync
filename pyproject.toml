@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "notion-letterboxd-sync"
+version = "0.1.0"
+description = "Fill Notion movie database from Letterboxd links via OMDb/TMDb"
+requires-python = ">=3.9"
+dependencies = []
+
