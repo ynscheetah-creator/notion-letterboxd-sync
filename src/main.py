@@ -13,9 +13,17 @@ def is_empty(val):
 
 def compose_update(existing_props, fetched):
     out = {}
-    for key in ("year", "runtime", "director", "writer", "cinematography", "poster"):
+    simple_keys = (
+        "year", "runtime", "director", "writer", "cinematography",
+        "poster", "original_title", "synopsis", "cast_top", "backdrop", "trailer_url"
+    )
+    for key in simple_keys:
         if fetched.get(key) not in (None, ""):
             out[key] = fetched[key]
+    if fetched.get("countries"):
+        out["countries"] = fetched["countries"]
+    if fetched.get("languages"):
+        out["languages"] = fetched["languages"]
     return out
 
 
