@@ -51,3 +51,79 @@ def update_page(page_id: str, data: dict, existing_props: dict | None = None):
 
     if len(kwargs) > 1:
         client.pages.update(**kwargs)
+        # ---- NEED KEYS: hangi alanlardan en az biri boşsa dolduracağız ----
+NEED_KEYS = (
+    "year", "director", "writer", "cinematography", "runtime",
+    "poster", "original_title", "synopsis",
+    "countries", "languages", "cast_top", "backdrop", "trailer_url"
+)
+
+def iter_pages_needing_fill(limit: int = 200):
+    """
+    Letterboxd linki olan ve hedef alanlarından en az biri boş olan sayfaları döndürür.
+    Tüm veritabanını taramak için sayfalama (start_cursor) kullanır.
+    limit=0 -> limitsiz.
+    """
+    page_size = 100
+    start_cursor = None
+    results = []
+
+    while True:
+        payload = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+
+        resp = client.databases.query(**payload)
+        pages = resp.get("results", [])
+        start_cursor = resp.get("next_cursor")
+        has_more = resp.get("has_more", False)
+
+        for page in pages:
+            props = page["properties"]
+
+            # Letterboxd linki yoksa atla
+            lb = read_prop(props, NOTION_COLS.get("letterboxd"))
+            if not lb:
+                continue
+
+            # En az bir hedef alan boş mu?
+            need_any = False
+            for k in NEED_KEYS:
+                col = NOTION_COLS.get(k)
+                if not col or col not in props:
+                    continue
+                v = read_prop(props, col)
+                if k in ("year", "runtime"):
+                    if v is None:
+                        need_any = True
+                        break
+                else:
+                    if v in (None, "", []):
+                        need_any = True
+                        break
+
+            if need_any:
+                results.append(page)
+                if limit and len(results) >= limit:
+                    return results
+
+        if not has_more:
+            break
+
+    return results
+
+
+def iter_all_pages():
+    """Veritabanındaki TÜM sayfaları sayfalamayla getirir (set-covers gibi işler için)."""
+    page_size = 100
+    start_cursor = None
+    while True:
+        payload = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+        resp = client.databases.query(**payload)
+        for page in resp.get("results", []):
+            yield page
+        if not resp.get("has_more"):
+            break
+        start_cursor = resp.get("next_cursor")
