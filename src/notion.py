@@ -1,49 +1,136 @@
-def _as_list(x):
-    """str -> ['a','b'] ya da zaten list ise normalize et."""
+# src/notion.py
+from __future__ import annotations
+
+from notion_client import Client
+from typing import Any, Dict, List, Optional
+
+from .config import NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_COLS
+
+# Notion client
+client = Client(auth=NOTION_TOKEN)
+
+# -----------------------------
+# Helpers: Notion value builders
+# -----------------------------
+def _txt(val: Optional[str]) -> Dict[str, Any]:
+    if val is None:
+        return {"rich_text": []}
+    s = str(val)
+    return {"rich_text": [{"type": "text", "text": {"content": s}}]}
+
+def _num(val: Optional[Any]) -> Dict[str, Any]:
+    if val in (None, ""):
+        return {"number": None}
+    try:
+        return {"number": int(val)}
+    except Exception:
+        try:
+            return {"number": float(val)}
+        except Exception:
+            return {"number": None}
+
+def _url(val: Optional[str]) -> Dict[str, Any]:
+    return {"url": (str(val) if val else None)}
+
+def _multi(items: Optional[List[str]]) -> Dict[str, Any]:
+    arr = []
+    if items:
+        for it in items:
+            name = str(it).strip()
+            if name:
+                arr.append({"name": name})
+    return {"multi_select": arr}
+
+def _as_list(x: Any) -> List[str]:
+    """'A, B , C' -> ['A','B','C'] ya da zaten list ise normalize et."""
     if x is None:
         return []
     if isinstance(x, (list, tuple, set)):
         return [str(i).strip() for i in x if str(i).strip()]
-    # 'A, B , C' -> ['A','B','C']
     return [p.strip() for p in str(x).split(",") if p.strip()]
 
+# -----------------------------
+# Read helpers
+# -----------------------------
+def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
+    """Notion property'yi sade Python değerine çevir."""
+    if not col_name or col_name not in props:
+        return None
 
-def update_page(page_id: str, data: dict, existing_props: dict | None = None):
+    prop = props[col_name]
+    ptype = prop.get("type")
+
+    if ptype == "title":
+        return "".join([t.get("plain_text", "") for t in prop.get("title", [])]).strip()
+    if ptype == "rich_text":
+        return "".join([t.get("plain_text", "") for t in prop.get("rich_text", [])]).strip()
+    if ptype == "number":
+        return prop.get("number")
+    if ptype == "url":
+        return prop.get("url")
+    if ptype == "multi_select":
+        return [o.get("name", "") for o in prop.get("multi_select", [])]
+    if ptype == "files":
+        files = prop.get("files", [])
+        if not files:
+            return None
+        f0 = files[0]
+        if f0.get("type") == "external":
+            return f0.get("external", {}).get("url")
+        if f0.get("type") == "file":
+            return f0.get("file", {}).get("url")
+        return None
+
+    # Other types ignored
+    return None
+
+# -----------------------------
+# Update helpers
+# -----------------------------
+def update_cover(page_id: str, url: Optional[str]) -> None:
+    if not url:
+        return
+    client.pages.update(
+        page_id=page_id,
+        cover={"type": "external", "external": {"url": url}},
+    )
+
+def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, Any] | None = None) -> None:
     """
     Python dict -> Notion properties + cover.
-    Bu sürüm Director/Writer/Cinematography/CastTop/Countries/Languages alanlarını
-    MULTI-SELECT olarak yazar.
+    Bu sürüm Director / Writer / Cinematography / Cast Top 3 / Countries / Languages
+    alanlarını **multi-select** olarak yazar. Poster / Backdrop / Trailer URL ise **URL**'dür.
     """
-    props = {}
+    props: Dict[str, Any] = {}
 
-    # ---- Numbers ----
+    # Numbers
     if "year" in data and NOTION_COLS.get("year"):
         props[NOTION_COLS["year"]] = _num(data["year"])
     if "runtime" in data and NOTION_COLS.get("runtime"):
         props[NOTION_COLS["runtime"]] = _num(data["runtime"])
 
-    # ---- Text (rich_text) ----
+    # Text
     for k in ("original_title", "synopsis"):
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _txt(data[k])
 
-    # ---- URLs ----
+    # URLs
     for k in ("poster", "backdrop", "trailer_url"):
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _url(data[k])
 
-    # ---- MULTI-SELECT alanlar ----
+    # Multi-select fields
     for k in ("director", "writer", "cinematography", "cast_top", "countries", "languages"):
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _multi(_as_list(data[k]))
 
-    # ---- COVER: Backdrop varsa kapak yap ----
+    # Cover from backdrop
     cover_payload = None
     if data.get("backdrop"):
         cover_payload = {"type": "external", "external": {"url": data["backdrop"]}}
 
-    # ---- Notion update ----
-    kwargs = {"page_id": page_id}
+    # Final update call
+    kwargs: Dict[str, Any] = {"page_id": page_id}
     if props:
         kwargs["properties"] = props
     if cover_payload:
@@ -51,25 +138,28 @@ def update_page(page_id: str, data: dict, existing_props: dict | None = None):
 
     if len(kwargs) > 1:
         client.pages.update(**kwargs)
-        # ---- NEED KEYS: hangi alanlardan en az biri boşsa dolduracağız ----
+
+# -----------------------------
+# Query helpers
+# -----------------------------
+# Doldurulmasını hedeflediğimiz alanlar
 NEED_KEYS = (
     "year", "director", "writer", "cinematography", "runtime",
     "poster", "original_title", "synopsis",
-    "countries", "languages", "cast_top", "backdrop", "trailer_url"
+    "countries", "languages", "cast_top", "backdrop", "trailer_url",
 )
 
 def iter_pages_needing_fill(limit: int = 200):
     """
     Letterboxd linki olan ve hedef alanlarından en az biri boş olan sayfaları döndürür.
-    Tüm veritabanını taramak için sayfalama (start_cursor) kullanır.
-    limit=0 -> limitsiz.
+    limit=0 -> limitsiz. Veritabanını sayfalayarak tarar.
     """
     page_size = 100
     start_cursor = None
-    results = []
+    results: List[Dict[str, Any]] = []
 
     while True:
-        payload = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        payload: Dict[str, Any] = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
@@ -81,7 +171,7 @@ def iter_pages_needing_fill(limit: int = 200):
         for page in pages:
             props = page["properties"]
 
-            # Letterboxd linki yoksa atla
+            # Letterboxd link yoksa atla
             lb = read_prop(props, NOTION_COLS.get("letterboxd"))
             if not lb:
                 continue
@@ -112,13 +202,12 @@ def iter_pages_needing_fill(limit: int = 200):
 
     return results
 
-
 def iter_all_pages():
-    """Veritabanındaki TÜM sayfaları sayfalamayla getirir (set-covers gibi işler için)."""
+    """Veritabanındaki TÜM sayfaları sayfalamayla getirir (örn. toplu cover set için)."""
     page_size = 100
     start_cursor = None
     while True:
-        payload = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        payload: Dict[str, Any] = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
         if start_cursor:
             payload["start_cursor"] = start_cursor
         resp = client.databases.query(**payload)
