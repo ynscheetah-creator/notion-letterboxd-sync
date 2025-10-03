@@ -45,11 +45,35 @@ NEED_KEYS = (
     "original_title","synopsis","countries","languages","cast_top","backdrop","trailer_url"
 )
 
+import time
+from notion_client import Client
+from notion_client.errors import APIResponseError
+from .config import NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_COLS
+
+# ... read_prop ve yardımcılar aynı kalsın ...
+
+client = Client(auth=NOTION_TOKEN)
+
+NEED_KEYS = (
+    "year","director","writer","cinematography","runtime","poster",
+    "original_title","synopsis","countries","languages","cast_top","backdrop","trailer_url"
+)
+
+def _query_with_retry(payload):
+    delay = 0.5
+    for _ in range(6):
+        try:
+            return client.databases.query(**payload)
+        except APIResponseError as e:
+            status = getattr(e, "status", None)
+            if status in (409, 429, 500, 502, 503, 504):
+                time.sleep(delay)
+                delay = min(delay * 2, 8)
+                continue
+            raise
+
 def iter_pages_needing_fill(limit=200):
-    """
-    Letterboxd linki olan ve hedef alanlardan en az biri boş olan sayfaları döndür.
-    Tüm veritabanını sayfalayarak tarar.
-    """
+    """Letterboxd linki olan ve hedef alanlardan EN AZ BİRİ boş olan sayfaları döndürür."""
     page_size = 100
     start_cursor = None
     results = []
@@ -59,7 +83,7 @@ def iter_pages_needing_fill(limit=200):
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
-        resp = client.databases.query(**payload)
+        resp = _query_with_retry(payload)
         pages = resp.get("results", [])
         start_cursor = resp.get("next_cursor")
         has_more = resp.get("has_more", False)
@@ -70,10 +94,11 @@ def iter_pages_needing_fill(limit=200):
             if not lb:
                 continue
 
+            # boşluk kontrolü
             need_any = False
             for k in NEED_KEYS:
                 col = NOTION_COLS.get(k)
-                if col in props:
+                if col and col in props:
                     v = read_prop(props, col)
                     if k in ("year","runtime"):
                         if v is None: need_any = True; break
