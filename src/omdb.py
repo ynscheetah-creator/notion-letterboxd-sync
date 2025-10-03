@@ -1,63 +1,78 @@
-"""
-OMDb: başlık+yıl ile hızlı dene (başarısız olursa TMDb’ye bırakıyoruz).
-"""
 import requests
-from .config import OMDB_API_KEY
+from .config import TMDB_API_KEY
 
-BASE = "https://www.omdbapi.com/"
+TMDB_BASE = "https://api.themoviedb.org/3"
 
-def _ok(js):
-    return js and js.get("Response") == "True"
+def _use_headers():
+    # V4 Bearer varsa header; yoksa v3 key’i querystring
+    return {"Authorization": f"Bearer {TMDB_API_KEY}"} if TMDB_API_KEY and len(TMDB_API_KEY) > 40 else None
 
-def get_by_title(title: str, year: int | None = None):
-    if not OMDB_API_KEY or not title:
-        return None
-    params = {"apikey": OMDB_API_KEY, "t": title}
-    if year:
-        params["y"] = str(year)
-    try:
-        r = requests.get(BASE, params=params, timeout=20)
-        js = r.json()
-    except Exception:
-        return None
-    if not _ok(js):
-        return None
+def _req(path, params=None):
+    params = params or {}
+    h = _use_headers()
+    if h:
+        return requests.get(f"{TMDB_BASE}{path}", headers=h, params=params, timeout=25)
+    params = {"api_key": TMDB_API_KEY, **params}
+    return requests.get(f"{TMDB_BASE}{path}", params=params, timeout=25)
 
+def _poster_url(p):   return f"https://image.tmdb.org/t/p/w500{p}"  if p else None
+def _backdrop_url(p): return f"https://image.tmdb.org/t/p/w780{p}"  if p else None
+
+def _map(movie, credits=None, details=None, videos=None):
+    m = {**(movie or {}), **(details or {})}
     out = {
-        "title": js.get("Title"),
-        "year": int(js["Year"]) if js.get("Year", "").isdigit() else None,
-        "runtime": None,
-        "director": js.get("Director") or None,
-        "writer": js.get("Writer") or None,
-        "cinematography": None,  # OMDb her zaman vermez
-        "poster": js.get("Poster") if js.get("Poster", "").startswith("http") else None,
-
-        # ekstra alanlar OMDb’de zayıf olduğu için boş dönebilir
-        "original_title": js.get("Title") or None,
-        "synopsis": js.get("Plot") or None,
-        "countries": [c.strip() for c in (js.get("Country") or "").split(",") if c.strip()] or None,
-        "languages": [l.strip() for l in (js.get("Language") or "").split(",") if l.strip()] or None,
+        "title": m.get("title"),
+        "original_title": m.get("original_title"),
+        "year": int(m["release_date"][:4]) if m.get("release_date") else None,
+        "runtime": m.get("runtime") or None,
+        "synopsis": m.get("overview") or None,
+        "countries": [c.get("name") for c in m.get("production_countries", [])] or None,
+        "languages": [l.get("english_name") for l in m.get("spoken_languages", [])] or None,
+        "poster": _poster_url(m.get("poster_path")),
+        "backdrop": _backdrop_url(m.get("backdrop_path")),
+        "director": None,
+        "writer": None,
+        "cinematography": None,
         "cast_top": None,
-        "backdrop": None,
         "trailer_url": None,
     }
-
-    # runtime "148 min" formatında gelir
-    if js.get("Runtime", "").endswith(" min"):
-        try:
-            out["runtime"] = int(js["Runtime"].split()[0])
-        except Exception:
-            pass
-
-    # görüntü yönetmeni varsa
-    for k in ("Cinematography", "cinematography"):
-        if js.get(k):
-            out["cinematography"] = js.get(k)
-            break
-
-    # başrol listesi (ilk 3)
-    actors = [a.strip() for a in (js.get("Actors") or "").split(",") if a.strip()]
-    if actors:
-        out["cast_top"] = ", ".join(actors[:3])
-
+    if credits:
+        crew = credits.get("crew", [])
+        out["director"] = ", ".join([c["name"] for c in crew if c.get("job") == "Director"]) or None
+        out["writer"]   = ", ".join([c["name"] for c in crew if c.get("job") in ("Writer","Screenplay","Author")]) or None
+        dops = [c["name"] for c in crew if c.get("job") in ("Director of Photography","Cinematography")]
+        out["cinematography"] = ", ".join(dops) if dops else None
+        cast = credits.get("cast", [])
+        if cast:
+            out["cast_top"] = ", ".join([p["name"] for p in cast[:3]])
+    if videos:
+        vids = videos.get("results", [])
+        yt = [v for v in vids if v.get("site") == "YouTube" and v.get("type") == "Trailer"]
+        if yt:
+            out["trailer_url"] = f"https://youtu.be/{yt[0]['key']}"
     return out
+
+def get_by_title(title: str, year: int | None = None):
+    if not TMDB_API_KEY or not title:
+        return None
+    r = _req("/search/movie", {"query": title})
+    if r.status_code != 200:
+        return None
+    res = r.json().get("results") or []
+    if not res:
+        return None
+    pick = None
+    if year:
+        for m in res:
+            try:
+                if m.get("release_date") and int(m["release_date"][:4]) == int(year):
+                    pick = m; break
+            except Exception:
+                pass
+    if not pick:
+        pick = res[0]
+    mid = pick["id"]
+    det  = _req(f"/movie/{mid}").json()
+    cred = _req(f"/movie/{mid}/credits").json()
+    vids = _req(f"/movie/{mid}/videos").json()
+    return _map(pick, cred, det, vids)
