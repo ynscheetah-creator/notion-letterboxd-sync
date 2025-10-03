@@ -1,5 +1,6 @@
 import argparse
 import time
+import os
 from dotenv import load_dotenv
 
 from .config import NOTION_COLS, DEFAULT_LIMIT
