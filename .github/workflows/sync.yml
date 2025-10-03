@@ -29,4 +29,4 @@ jobs:
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
-          python -m src.main
+          python -m src.main --limit 0
