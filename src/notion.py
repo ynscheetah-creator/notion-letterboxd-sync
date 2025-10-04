@@ -1,6 +1,7 @@
 # src/notion.py
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 from notion_client import Client
 
@@ -44,7 +45,7 @@ def _multi(items: Optional[List[str]]) -> Dict[str, Any]:
     return {"multi_select": arr}
 
 def _as_list(x: Any) -> List[str]:
-    """'A, B , C' -> ['A','B','C'] ya da zaten list ise normalize et."""
+    """'A, B , C' -> ['A','B','C'] (zaten listeyse normalize et)."""
     if x is None:
         return []
     if isinstance(x, (list, tuple, set)):
@@ -52,7 +53,7 @@ def _as_list(x: Any) -> List[str]:
     return [p.strip() for p in str(x).split(",") if p.strip()]
 
 # -----------------------------
-# Readers
+# Read helpers (Notion -> Python)
 # -----------------------------
 def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
     """Notion property'yi sade Python değerine çevir."""
@@ -63,9 +64,9 @@ def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
     ptype = prop.get("type")
 
     if ptype == "title":
-        return "".join(t.get("plain_text", "") for t in prop.get("title", [])).strip()
+        return "".join([t.get("plain_text", "") for t in prop.get("title", [])]).strip()
     if ptype == "rich_text":
-        return "".join(t.get("plain_text", "") for t in prop.get("rich_text", [])).strip()
+        return "".join([t.get("plain_text", "") for t in prop.get("rich_text", [])]).strip()
     if ptype == "number":
         return prop.get("number")
     if ptype == "url":
@@ -82,30 +83,41 @@ def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
         if f0.get("type") == "file":
             return f0.get("file", {}).get("url")
         return None
+
     return None
 
 def get_page_title(props: Dict[str, Any]) -> Optional[str]:
-    """
-    NOTION_COLS['name'] yanlış/boş olsa bile title tipindeki property'den başlık döndürür.
-    """
-    # 1) Mapping ile
+    """Title tipindeki property'den başlık döndür (mapping yanlış olsa bile)."""
     name_col = NOTION_COLS.get("name")
     if name_col and name_col in props and props[name_col].get("type") == "title":
         s = "".join(t.get("plain_text", "") for t in props[name_col].get("title", []))
-        s = s.strip()
-        if s:
-            return s
-    # 2) Tüm property'lerde type=title ara
+        return (s or "").strip() or None
     for p in props.values():
         if p.get("type") == "title":
             s = "".join(t.get("plain_text", "") for t in p.get("title", []))
-            s = s.strip()
+            s = (s or "").strip()
             if s:
                 return s
     return None
 
+def find_letterboxd_url(props: Dict[str, Any]) -> Optional[str]:
+    """
+    Letterboxd/boxd.it linkini açıkça 'Letterboxd' kolonunda bulamazsak
+    tüm başlık/rt/url alanlarının düz metninde ararız.
+    """
+    text_blobs: List[str] = []
+    for p in props.values():
+        t = p.get("type")
+        if t == "url" and p.get("url"):
+            text_blobs.append(str(p["url"]))
+        elif t in ("rich_text", "title"):
+            text_blobs.extend([r.get("plain_text", "") for r in p.get(t, [])])
+    blob = " ".join(text_blobs)
+    m = re.search(r"(https?://(?:boxd\.it|letterboxd\.com)/[^\s)]+)", blob)
+    return m.group(1) if m else None
+
 # -----------------------------
-# Update helpers
+# Write helpers (Python -> Notion)
 # -----------------------------
 def update_cover(page_id: str, url: Optional[str]) -> None:
     if not url:
@@ -162,7 +174,7 @@ def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, An
 # -----------------------------
 # Query helpers
 # -----------------------------
-# Doldurulmasını hedeflediğimiz alanlar
+# Hedef kolonlar (en az biri boş ise doldurulması gerekenler)
 NEED_KEYS = (
     "year", "director", "writer", "cinematography", "runtime",
     "poster", "original_title", "synopsis",
@@ -221,7 +233,23 @@ def iter_pages_needing_fill(limit: int = 200):
             break
 
     return results
-    # --- NEW: son düzenlenen/eklenen sayfaları getir (eksik alan şartı yok) ---
+
+def iter_all_pages():
+    """Veritabanındaki TÜM sayfaları sayfalamayla getirir (örn. toplu cover set için)."""
+    page_size = 100
+    start_cursor = None
+    while True:
+        payload: Dict[str, Any] = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+        resp = client.databases.query(**payload)
+        for page in resp.get("results", []):
+            yield page
+        if not resp.get("has_more"):
+            break
+        start_cursor = resp.get("next_cursor")
+
+# --- NEW: son düzenlenen/eklenen sayfaları getir (eksik alan şartı yok) ---
 def iter_recent_pages(hours: int = 36, limit: int = 50):
     """
     last_edited_time son 'hours' içinde olan sayfaları döndürür.
@@ -232,7 +260,7 @@ def iter_recent_pages(hours: int = 36, limit: int = 50):
 
     page_size = 100
     start_cursor = None
-    collected = []
+    collected: List[Dict[str, Any]] = []
 
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
@@ -262,28 +290,3 @@ def iter_recent_pages(hours: int = 36, limit: int = 50):
             break
 
     return collected
-
-def iter_all_pages():
-    """Veritabanındaki TÜM sayfaları sayfalamayla getirir (örn. toplu cover set için)."""
-    page_size = 100
-    start_cursor = None
-    while True:
-        payload: Dict[str, Any] = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
-        if start_cursor:
-            payload["start_cursor"] = start_cursor
-        resp = client.databases.query(**payload)
-        for page in resp.get("results", []):
-            yield page
-        if not resp.get("has_more"):
-            break
-        start_cursor = resp.get("next_cursor")
-def find_letterboxd_url(props: dict) -> str | None:
-    """Sütun adı bozuksa bile, URL tipli property'lerden boxd.it / letterboxd.com linkini bul."""
-    for p in props.values():
-        if p.get("type") == "url":
-            u = p.get("url")
-            if isinstance(u, str) and u:
-                lu = u.lower()
-                if "boxd.it" in lu or "letterboxd.com/film" in lu:
-                    return u
-    return None
