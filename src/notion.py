@@ -236,3 +236,13 @@ def iter_all_pages():
         if not resp.get("has_more"):
             break
         start_cursor = resp.get("next_cursor")
+def find_letterboxd_url(props: dict) -> str | None:
+    """Sütun adı bozuksa bile, URL tipli property'lerden boxd.it / letterboxd.com linkini bul."""
+    for p in props.values():
+        if p.get("type") == "url":
+            u = p.get("url")
+            if isinstance(u, str) and u:
+                lu = u.lower()
+                if "boxd.it" in lu or "letterboxd.com/film" in lu:
+                    return u
+    return None
