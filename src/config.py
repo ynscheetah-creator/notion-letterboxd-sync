@@ -14,25 +14,26 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "").strip()
 # -----------------------------
 # Notion Column Mapping
 # -----------------------------
-# Buradaki adlar birebir Notion’daki sütun adlarınla eşleşmeli
-NOTION_COLS: Dict[str, str] = {
-    "name": "Name",
-    "letterboxd": "Letterboxd URI",
+# Buradaki değerler Notion’daki sütun adlarının KESİN yazımı olmalı
+NOTION_COLS = {
+    "name":            "Name",              # title
+    "letterboxd":      "Letterboxd",        # url veya text
 
-    "year": "Year",
-    "runtime": "Runtime (min)",
+    "year":            "Year",              # number
+    "runtime":         "Runtime (min)",     # number
 
-    "poster": "Poster",
-    "backdrop": "Backdrop",
-    "trailer_url": "Trailer URL",
+    "director":        "Director",          # multi-select
+    "writer":          "Writer",            # multi-select
+    "cinematography":  "Cinematography",    # multi-select
+    "cast_top":        "Cast (Top 3)",      # multi-select
 
-    "original_title": "Original Title",
-    "synopsis": "Overview / Plot",
+    "poster":          "Poster",            # url
+    "backdrop":        "Backdrop",          # url
+    "trailer_url":     "Trailer URL",       # url
 
-    "director": "Director",
-    "writer": "Writer",
-    "cinematography": "Cinematography",
-    "cast_top": "Cast Top",
-    "countries": "Countries",
-    "languages": "Languages",
+    "original_title":  "Original Title",    # rich_text
+    "synopsis":        "Synopsis",          # rich_text
+
+    "countries":       "Countries",         # multi-select
+    "languages":       "Languages",         # multi-select
 }
