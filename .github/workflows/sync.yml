@@ -2,7 +2,7 @@ name: Fill missing fields
 
 on:
   schedule:
-    # Türkiye saati 15:00 (UTC 05:00)
+    # Türkiye saati 08:00 (UTC 05:00)
     - cron: "0 5 * * *"
     # Türkiye saati 23:00 (UTC 20:00)
     - cron: "0 20 * * *"
