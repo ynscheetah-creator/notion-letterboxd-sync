@@ -221,6 +221,47 @@ def iter_pages_needing_fill(limit: int = 200):
             break
 
     return results
+    # --- NEW: son düzenlenen/eklenen sayfaları getir (eksik alan şartı yok) ---
+def iter_recent_pages(hours: int = 36, limit: int = 50):
+    """
+    last_edited_time son 'hours' içinde olan sayfaları döndürür.
+    limit=0 -> limitsiz. Eksik alan şartı aramaz; Letterboxd linki olanları
+    main tarafında filtreleyeceğiz.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    page_size = 100
+    start_cursor = None
+    collected = []
+
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+    base_filter = {
+        "filter": {
+            "timestamp": "last_edited_time",
+            "last_edited_time": {"on_or_after": since}
+        }
+    }
+
+    while True:
+        payload = {"database_id": NOTION_DATABASE_ID, "page_size": page_size, **base_filter}
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+
+        resp = client.databases.query(**payload)
+        pages = resp.get("results", [])
+        start_cursor = resp.get("next_cursor")
+        has_more = resp.get("has_more", False)
+
+        for p in pages:
+            collected.append(p)
+            if limit and len(collected) >= limit:
+                return collected
+
+        if not has_more:
+            break
+
+    return collected
 
 def iter_all_pages():
     """Veritabanındaki TÜM sayfaları sayfalamayla getirir (örn. toplu cover set için)."""
