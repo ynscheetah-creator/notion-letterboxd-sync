@@ -88,83 +88,76 @@ def main():
         print(f"[cover] Done. Scanned={scanned}, set={fixed}")
         return
 
-    # --- Force recent mode ---
-    if args.force_recent and args.force_recent > 0:
-        print(f"Running recent sync (last {args.force_recent})")
-     pages = nz.iter_recent_pages(force_recent=args.force_recent, by="created")
-        updated = 0
+# --- Force recent (son N sayfa) ---
+if args.force_recent and args.force_recent > 0:
+    print(f"Running recent sync (last {args.force_recent})")
+    # created_time'a göre son N sayfa
+    pages = nz.iter_recent_pages(force_recent=args.force_recent, by="created")
 
-        for idx, page in enumerate(pages, start=1):
-            props = page["properties"]
-            pid = page["id"]
+    updated = 0
+    for idx, page in enumerate(pages, start=1):
+        props = page["properties"]
+        pid = page["id"]
 
-            lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
-            if not lb_url:
-                continue
+        # Letterboxd link yoksa atla
+        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
+        if not lb_url:
+            continue
 
-            current_title = nz.get_page_title(props) or ""
-            need_title = (not current_title or current_title.lower() == "new page")
+        # Başlık gerekirse doldur
+        current_title = nz.get_page_title(props) or ""
+        need_title = (not current_title or current_title.lower() == "new page")
 
-            # Pull meta from Letterboxd
+        # Letterboxd meta
+        meta = None
+        try:
+            meta = lb.parse(lb_url)
+        except Exception:
             meta = None
-            try:
-                meta = lb.parse(lb_url)
-            except Exception:
-                meta = None
 
-            title_guess = (meta or {}).get("title")
-            year_guess = (meta or {}).get("year")
-            imdb_id = (meta or {}).get("imdb_id")
-            tmdb_id = (meta or {}).get("tmdb_id")
+        payload: Dict[str, Any] = {}
+        if meta:
+            if need_title and meta.get("title"):
+                payload["original_title"] = meta.get("title")
+            if meta.get("year"):
+                payload["year"] = meta.get("year")
 
-            print(f"[debug] recent row {idx}: url='{lb_url}' title='{title_guess}' year='{year_guess}'")
+        # --- OMDb / TMDb ile zenginleştir (senin mevcut kodun burada devam ediyor) ---
+        # omdb/tmdb çağrılarını ve nz.update_page(...) kısmını aynı girinti seviyesinde tut
 
-            # 1) Name alanını doldur
-            if need_title and title_guess:
-                if args.dry_run:
-                    print(f"[dry] Would set title: '{title_guess}'")
-                else:
-                    nz.set_title_if_empty(pid, title_guess)
-                    time.sleep(0.15)  # Notion rate limit
-
-            # 2) Diğer alanlar (OMDb/TMDb)
-            payload: Dict[str, Any] = {}
-
-            # OMDb
+        # ÖRNEK: (mevcut kodunla aynıysa bırak)
+        omdb_data = None
+        try:
+            if meta and meta.get("imdb_id") and hasattr(omdb, "get_by_imdb"):
+                omdb_data = omdb.get_by_imdb(meta["imdb_id"])
+            elif hasattr(omdb, "get_by_title") and meta and meta.get("title"):
+                omdb_data = omdb.get_by_title(meta["title"], meta.get("year"))
+        except Exception:
             omdb_data = None
+        if omdb_data:
+            _merge_payload(payload, _payload_from_omdb(omdb_data))
+
+        tmdb_data = None
+        if not payload or any(k not in payload for k in ("director", "writer", "cinematography", "runtime", "poster", "backdrop")):
             try:
-                if imdb_id and hasattr(omdb, "get_by_imdb"):
-                    omdb_data = omdb.get_by_imdb(imdb_id)
-                elif hasattr(omdb, "get_by_title") and title_guess:
-                    omdb_data = omdb.get_by_title(title_guess, year_guess)
+                if meta and meta.get("tmdb_id") and hasattr(tmdb, "get_by_id"):
+                    tmdb_data = tmdb.get_by_id(meta["tmdb_id"])
+                elif hasattr(tmdb, "get_by_title") and meta and meta.get("title"):
+                    tmdb_data = tmdb.get_by_title(meta["title"], meta.get("year"))
             except Exception:
-                omdb_data = None
-            if omdb_data:
-                _merge_payload(payload, _payload_from_omdb(omdb_data))
-
-            # TMDb (fallback/merge)
-            if tmdb_id or title_guess:
                 tmdb_data = None
-                try:
-                    if tmdb_id and hasattr(tmdb, "get_by_id"):
-                        tmdb_data = tmdb.get_by_id(tmdb_id)
-                    elif hasattr(tmdb, "get_by_title") and title_guess:
-                        tmdb_data = tmdb.get_by_title(title_guess, year_guess)
-                except Exception:
-                    tmdb_data = None
-                if tmdb_data:
-                    _merge_payload(payload, _payload_from_tmdb(tmdb_data))
+            if tmdb_data:
+                _merge_payload(payload, _payload_from_tmdb(tmdb_data))
 
-            if payload:
-                if args.dry_run:
-                    print(f"[dry] Would update: {payload}")
-                else:
-                    nz.update_page(pid, payload, existing_props=props)
-                    updated += 1
-                    time.sleep(0.2)
+        if not payload:
+            continue
 
-        print(f"Done. Updated {updated} pages.")
-        return
+        nz.update_page(pid, payload, existing_props=props)
+        updated += 1
+        time.sleep(0.2)
+
+    print(f"Done. Updated {updated} pages.")
+    return  # force-recent modunu bitir
 
     # --- Default: eksik alanları doldurma ---
     rows = nz.iter_pages_needing_fill(limit=args.limit)
