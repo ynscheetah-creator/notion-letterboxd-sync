@@ -20,13 +20,24 @@ def _num(val: Optional[Any]) -> Dict[str, Any]:
 def _url(val: Optional[str]) -> Dict[str, Any]:
     return {"url": (str(val) if val else None)}
 
-def _multi(items: Optional[List[str]]) -> Dict[str, Any]:
-    arr = []
-    for it in (items or []):
-        name = str(it).strip()
-        if name: arr.append({"name": name})
+def _multi(items: Optional[List[str]], limit: int | None = None) -> Dict[str, Any]:
+    """
+    Build a Notion multi_select payload from a list of names.
+    - Boşları ve tekrarları eler.
+    - `limit` verilirse (örn 100) en fazla o kadar seçenek döner (Notion limiti).
+    """
+    arr: List[Dict[str, str]] = []
+    if items:
+        seen: set[str] = set()
+        for it in items:
+            name = str(it).strip()
+            if not name or name in seen:
+                continue
+            arr.append({"name": name})
+            seen.add(name)
+            if limit and len(arr) >= limit:
+                break
     return {"multi_select": arr}
-
 # -------- readers
 def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
     if not col_name or col_name not in props: return None
