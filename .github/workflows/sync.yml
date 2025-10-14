@@ -37,6 +37,6 @@ jobs:
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-        run: |
-          echo "Running recent sync (last 48h)"
-          python -m src.main --recent-hours 48 --recent-limit 200
+ run: |
+    echo "Running recent sync (last 200)"
+    python -m src.main --force-recent 200
