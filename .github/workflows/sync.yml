@@ -32,11 +32,11 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run sync (force recent)
+        run: |
+          echo "Running recent sync (last 200)"
+          python -m src.main --force-recent 200
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
- run: |
-    echo "Running recent sync (last 200)"
-    python -m src.main --force-recent 200
