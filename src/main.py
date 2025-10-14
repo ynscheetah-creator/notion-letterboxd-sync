@@ -201,9 +201,96 @@ def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]
 
 
 # ------------------------------
+# Mod: MUBI availability yenile
+# ------------------------------
+def mode_refresh_mubi(args) -> int:
+    """Tüm sayfalarda MUBI availability'yi yenile (TMDb ID gerekli)"""
+    mode = args.refresh_mubi or "all"
+    print(f"[info] Refreshing MUBI availability (mode={mode})")
+    
+    updated = 0
+    skipped = 0
+    
+    for idx, page in enumerate(nz.iter_all_pages(), start=1):
+        props = page["properties"]
+        pid = page["id"]
+        
+        # TMDb ID'yi bul (Letterboxd'den parse ederiz)
+        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
+        if not lb_url:
+            skipped += 1
+            continue
+        
+        # Letterboxd'den TMDb ID al
+        try:
+            meta = lb.parse(lb_url) or {}
+            tmdb_id = meta.get("tmdb_id")
+            
+            if not tmdb_id:
+                print(f"[{idx}] No TMDb ID for {lb_url}")
+                skipped += 1
+                continue
+            
+            # MUBI ülkelerini getir
+            mubi_countries = tmdb.get_providers_mubi(tmdb_id)
+            
+            # Mevcut MUBI değerini kontrol et
+            current_mubi = nz.read_prop(props, NOTION_COLS.get("mubi")) or []
+            
+            # Değişiklik varsa güncelle
+            if set(mubi_countries) != set(current_mubi):
+                payload = {
+                    NOTION_COLS["mubi"]: nz._multi(mubi_countries)
+                }
+                nz.update_page(pid, payload, existing_props=props)
+                updated += 1
+                print(f"[{idx}] Updated MUBI: {mubi_countries}")
+            else:
+                print(f"[{idx}] MUBI unchanged: {mubi_countries}")
+                
+        except Exception as e:
+            print(f"[{idx}] Error: {e}")
+            skipped += 1
+    
+    print(f"[done] Updated {updated} pages, skipped {skipped}")
+    return updated
+
+
+# ------------------------------
+# Mod: Cover'ları backdrop'tan ayarla
+# ------------------------------
+def mode_set_covers(args) -> int:
+    """Backdrop URL'si olan tüm sayfalara cover ayarla"""
+    print(f"[info] Setting covers from backdrop URLs")
+    
+    updated = 0
+    
+    for idx, page in enumerate(nz.iter_all_pages(), start=1):
+        props = page["properties"]
+        pid = page["id"]
+        
+        # Backdrop URL'i var mı?
+        backdrop = nz.read_prop(props, NOTION_COLS.get("backdrop"))
+        if not backdrop:
+            continue
+        
+        try:
+            # Cover'ı ayarla
+            nz.update_cover(pid, backdrop)
+            updated += 1
+            print(f"[{idx}] Set cover for page {pid}")
+        except Exception as e:
+            print(f"[{idx}] Error setting cover: {e}")
+    
+    print(f"[done] Set {updated} covers")
+    return updated
+
+
+# ------------------------------
 # Mod: Son N sayfayı tara
 # ------------------------------
 def mode_force_recent(args) -> int:
+    """Son eklenen/düzenlenen N sayfayı doldur"""
     force_recent = args.force_recent or 20
     by = "created"
 
@@ -233,23 +320,10 @@ def mode_force_recent(args) -> int:
 
 
 # ------------------------------
-# Mod: MUBI availability yenile
+# Mod: Normal doldurma
 # ------------------------------
-def mode_refresh_mubi(args) -> int:
-    """Tüm sayfalarda MUBI availability'yi yenile (TMDb ID gerekli)"""
-    mode = args.refresh_mubi or "all"
-    print(f"[info] Refreshing MUBI availability (mode={mode})")
-    
-    updated = 0
-    pages = nz.iter_all_pages()
-    
-    for idx, page in enumerate(pages, start=1):
-        props = page["properties"]
-        pid = page["id"]
-        
-        # TMDb ID'yi bul (Letterboxd'den parse ederiz)
-        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
-        if not lb_url:
+def mode_normal(args) -> int:
+    """Normal mod: Letterboxd URL'i olan ve boş alanları olan sayfaları doldur"""
     limit = args.limit or 0
     print(f"[info] Starting normal sync (limit={limit if limit > 0 else 'unlimited'})")
 
@@ -285,9 +359,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="Notion × Letterboxd sync",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--limit", type=int, default=0, help="Normal modda güncellenecek sayfa sınırı (0=sınırsız)")
-    p.add_argument("--force-recent", type=int, default=0, help="Son N sayfayı (created/edited) modunda doldur")
-    p.add_argument("--dry-run", action="store_true", help="Sadece ne yapacağını göster, Notion'a yazma")
+    p.add_argument("--limit", type=int, default=0, 
+                   help="Normal modda güncellenecek sayfa sınırı (0=sınırsız)")
+    p.add_argument("--force-recent", type=int, default=0, 
+                   help="Son N sayfayı (created/edited) modunda doldur")
+    p.add_argument("--set-covers", action="store_true", 
+                   help="Backdrop URL'lerini cover olarak ayarla (tek seferlik)")
+    p.add_argument("--refresh-mubi", type=str, default="", 
+                   help="MUBI availability'yi yenile (all/recent)")
+    p.add_argument("--dry-run", action="store_true", 
+                   help="Sadece ne yapacağını göster, Notion'a yazma")
     return p
 
 
@@ -296,11 +377,14 @@ def main():
 
     if args.dry_run:
         print("[DRY RUN] Simülasyon modu - hiçbir şey değiştirilmeyecek")
-        # Dry-run için notion.update_page'i geçici olarak devre dışı bırakabiliriz
-        # ama şimdilik sadece uyarı verelim
     
     try:
-        if args.force_recent and args.force_recent > 0:
+        # Mod seçimi
+        if args.refresh_mubi:
+            updated = mode_refresh_mubi(args)
+        elif args.set_covers:
+            updated = mode_set_covers(args)
+        elif args.force_recent and args.force_recent > 0:
             updated = mode_force_recent(args)
         else:
             updated = mode_normal(args)
