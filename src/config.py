@@ -1,40 +1,35 @@
-# src/config.py
 from __future__ import annotations
 import os
-from typing import Dict
 
-# -----------------------------
-# Secrets (ENV’den okunuyor)
-# -----------------------------
-NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
-NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "").strip()
-OMDB_API_KEY = os.environ.get("OMDB_API_KEY", "").strip()
-TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "").strip()
+# ENV’den oku (GitHub Actions secrets ile gelir)
+NOTION_TOKEN = os.getenv("NOTION_TOKEN", "").strip()
+NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "").strip()
+OMDB_API_KEY = os.getenv("OMDB_API_KEY", "").strip()
+TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip()
 
-# -----------------------------
-# Notion Column Mapping
-# -----------------------------
-# Buradaki değerler Notion’daki sütun adlarının KESİN yazımı olmalı
+if not NOTION_TOKEN or not NOTION_DATABASE_ID:
+    raise RuntimeError("NOTION_TOKEN ve NOTION_DATABASE_ID zorunlu.")
+
+# Notion veritabanı kolon adlarını burada eşleyin
 NOTION_COLS = {
-    "name":            "Name",              # title
-    "letterboxd":      "Letterboxd",        # url veya text
+    "name": "Name",                 # title
+    "letterboxd": "Letterboxd",     # url ya da text (siz URL kullandınız)
+    "poster": "Poster",             # url
+    "backdrop": "Backdrop",         # url
+    "trailer_url": "Trailer URL",   # url
 
-    "year":            "Year",              # number
-    "runtime":         "Runtime (min)",     # number
-    "mubi":            "MUBI",              # multi-select
+    "year": "Year",                 # number
+    "runtime": "Runtime (min)",     # number
 
-    "director":        "Director",          # multi-select
-    "writer":          "Writer",            # multi-select
-    "cinematography":  "Cinematography",    # multi-select
-    "cast_top":        "Cast (Top 3)",      # multi-select
+    "original_title": "Original Title",  # rich_text
+    "synopsis": "Overview / Plot",       # rich_text
 
-    "poster":          "Poster",            # url
-    "backdrop":        "Backdrop",          # url
-    "trailer_url":     "Trailer URL",       # url
+    "director": "Director",         # multi-select
+    "writer": "Writer",             # multi-select
+    "cinematography": "Cinematography",  # multi-select
+    "cast_top": "Cast (Top 3)",     # multi-select
+    "countries": "Countries",       # multi-select
+    "languages": "Languages",       # multi-select
 
-    "original_title":  "Original Title",    # rich_text
-    "synopsis":        "Synopsis",          # rich_text
-
-    "countries":       "Countries",         # multi-select
-    "languages":       "Languages",         # multi-select
+    "mubi": "MUBI",                 # multi-select (YENİ: ISO ülke kodları)
 }
