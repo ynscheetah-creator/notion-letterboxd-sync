@@ -10,14 +10,17 @@ from .config import NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_COLS
 client = Client(auth=NOTION_TOKEN)
 
 # -----------------------------
-# Write helpers
+# Value builders
 # -----------------------------
+def _title(val: Optional[str]) -> Dict[str, Any]:
+    if not val:
+        return {"title": []}
+    return {"title": [{"type": "text", "text": {"content": str(val)}}]}
+
 def _txt(val: Optional[str]) -> Dict[str, Any]:
     if val is None:
         return {"rich_text": []}
-    s = str(val)
-    return {"rich_text": [{"type": "text", "text": {"content": s}}]}
-
+    return {"rich_text": [{"type": "text", "text": {"content": str(val)}}]}
 
 def _num(val: Optional[Any]) -> Dict[str, Any]:
     if val in (None, ""):
@@ -30,13 +33,11 @@ def _num(val: Optional[Any]) -> Dict[str, Any]:
         except Exception:
             return {"number": None}
 
-
 def _url(val: Optional[str]) -> Dict[str, Any]:
     return {"url": (str(val) if val else None)}
 
-
 def _multi(items: Optional[List[str]]) -> Dict[str, Any]:
-    arr = []
+    arr: List[Dict[str, Any]] = []
     if items:
         for it in items:
             name = str(it).strip()
@@ -44,21 +45,17 @@ def _multi(items: Optional[List[str]]) -> Dict[str, Any]:
                 arr.append({"name": name})
     return {"multi_select": arr}
 
-
 def _as_list(x: Any) -> List[str]:
-    """'A, B , C' -> ['A','B','C'] ya da zaten list ise normalize et."""
     if x is None:
         return []
     if isinstance(x, (list, tuple, set)):
         return [str(i).strip() for i in x if str(i).strip()]
     return [p.strip() for p in str(x).split(",") if p.strip()]
 
-
 # -----------------------------
 # Read helpers
 # -----------------------------
 def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
-    """Notion property'yi sade Python değerine çevir."""
     if not col_name or col_name not in props:
         return None
     prop = props[col_name]
@@ -86,23 +83,20 @@ def read_prop(props: Dict[str, Any], col_name: Optional[str]) -> Any:
         return None
     return None
 
-
 def get_page_title(props: Dict[str, Any]) -> Optional[str]:
-    """Title tipi property'den sayfa başlığını döndürür (mapping bozuksa bile)."""
-    # Önce mapping ile
+    # mapping ile dene
     name_col = NOTION_COLS.get("name")
     if name_col and name_col in props and props[name_col].get("type") == "title":
-        txt = "".join(t.get("plain_text", "") for t in props[name_col].get("title", [])).strip()
+        txt = "".join(t.get("plain_text","") for t in props[name_col].get("title",[])).strip()
         if txt:
             return txt
-    # Bütün property'leri tara
+    # tüm property'lerde title tara
     for p in props.values():
         if p.get("type") == "title":
-            txt = "".join(t.get("plain_text", "") for t in p.get("title", [])).strip()
+            txt = "".join(t.get("plain_text","") for t in p.get("title",[])).strip()
             if txt:
                 return txt
     return None
-
 
 # -----------------------------
 # Update helpers
@@ -115,14 +109,20 @@ def update_cover(page_id: str, url: Optional[str]) -> None:
         cover={"type": "external", "external": {"url": url}},
     )
 
-
 def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, Any] | None = None) -> None:
     """
     Python dict -> Notion properties + cover.
-    Director / Writer / Cinematography / Cast Top 3 / Countries / Languages multi-select;
-    Poster / Backdrop / Trailer URL ise URL'dür.
+    Başlığı (title) SADECE boşsa ya da “New page” ise yazar; diğer veriler normal güncellenir.
     """
     props: Dict[str, Any] = {}
+
+    # --- TITLE: if empty/"New page" then set ---
+    desired_title = data.get("name") or data.get("original_title") or data.get("title")
+    name_col = NOTION_COLS.get("name")
+    if desired_title and name_col:
+        current_title = get_page_title(existing_props or {})
+        if not current_title or current_title.lower() == "new page":
+            props[name_col] = _title(desired_title)
 
     # Numbers
     if "year" in data and NOTION_COLS.get("year"):
@@ -150,7 +150,6 @@ def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, An
     if data.get("backdrop"):
         cover_payload = {"type": "external", "external": {"url": data["backdrop"]}}
 
-    # Final update call
     kwargs: Dict[str, Any] = {"page_id": page_id}
     if props:
         kwargs["properties"] = props
@@ -159,7 +158,6 @@ def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, An
 
     if len(kwargs) > 1:
         client.pages.update(**kwargs)
-
 
 # -----------------------------
 # Query helpers
@@ -170,30 +168,11 @@ NEED_KEYS = (
     "countries", "languages", "cast_top", "backdrop", "trailer_url",
 )
 
-
-def _page_needs_fill(page: Dict[str, Any]) -> bool:
-    """Hedef alanlardan en az biri boşsa True."""
-    props = page["properties"]
-    # Letterboxd linki yoksa boş sayfalara dokunma
-    lb = read_prop(props, NOTION_COLS.get("letterboxd"))
-    if not lb:
-        return False
-    for k in NEED_KEYS:
-        col = NOTION_COLS.get(k)
-        if not col or col not in props:
-            continue
-        v = read_prop(props, col)
-        if k in ("year", "runtime"):
-            if v is None:
-                return True
-        else:
-            if v in (None, "", []):
-                return True
-    return False
-
-
-def iter_pages_needing_fill(limit: int = 200) -> List[Dict[str, Any]]:
-    """Veritabanını sayfalayarak, eksik alanı olan sayfaları getirir."""
+def iter_pages_needing_fill(limit: int = 200):
+    """
+    Letterboxd linki olan ve hedef alanlarından en az biri boş olan sayfaları döndürür.
+    limit=0 -> limitsiz. Veritabanını sayfalayarak tarar.
+    """
     page_size = 100
     start_cursor = None
     results: List[Dict[str, Any]] = []
@@ -209,7 +188,28 @@ def iter_pages_needing_fill(limit: int = 200) -> List[Dict[str, Any]]:
         has_more = resp.get("has_more", False)
 
         for page in pages:
-            if _page_needs_fill(page):
+            props = page["properties"]
+
+            lb = read_prop(props, NOTION_COLS.get("letterboxd"))
+            if not lb:
+                continue
+
+            need_any = False
+            for k in NEED_KEYS:
+                col = NOTION_COLS.get(k)
+                if not col or col not in props:
+                    continue
+                v = read_prop(props, col)
+                if k in ("year", "runtime"):
+                    if v is None:
+                        need_any = True
+                        break
+                else:
+                    if v in (None, "", []):
+                        need_any = True
+                        break
+
+            if need_any:
                 results.append(page)
                 if limit and len(results) >= limit:
                     return results
@@ -219,43 +219,30 @@ def iter_pages_needing_fill(limit: int = 200) -> List[Dict[str, Any]]:
 
     return results
 
-
-def iter_recent_pages(recent_count: int = 200, limit: int = 0) -> List[Dict[str, Any]]:
+def iter_recent_pages(force_recent: int = 200):
     """
-    Son eklenen/edite edilen sayfalardan recent_count kadarını getirir.
-    Sadece link olan 'yeni' satırların da çekilmesi için kullanılır.
+    Veritabanından son `force_recent` sayfayı getirir (oluşturulma/son güncelleme sırası).
+    Başlıkları “New page” olan taze satırları yakalamak için kullanılır.
     """
-    # Notion query API'de "created_time" sort'u kullanarak sonları çekiyoruz
-    payload: Dict[str, Any] = {
-        "database_id": NOTION_DATABASE_ID,
-        "page_size": min(100, max(1, recent_count)),
-        "sorts": [{"timestamp": "created_time", "direction": "descending"}],
-    }
-    resp = client.databases.query(**payload)
-    pages = resp.get("results", [])
+    page_size = min(100, force_recent if force_recent > 0 else 100)
+    start_cursor = None
+    collected: List[Dict[str, Any]] = []
 
-    # İkinci sayfa vs gerekirse (recent_count > 100 ise) devamını da al
-    results: List[Dict[str, Any]] = []
-    results.extend(pages)
-    next_cursor = resp.get("next_cursor")
-    fetched = len(results)
-    while fetched < recent_count and resp.get("has_more"):
-        payload["start_cursor"] = next_cursor
+    while True:
+        payload: Dict[str, Any] = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
         resp = client.databases.query(**payload)
         pages = resp.get("results", [])
-        results.extend(pages)
-        fetched = len(results)
-        next_cursor = resp.get("next_cursor")
+        collected.extend(pages)
+        if len(collected) >= force_recent:
+            return collected[:force_recent]
         if not resp.get("has_more"):
-            break
-
-    if limit and len(results) > limit:
-        results = results[:limit]
-    return results
-
+            return collected
+        start_cursor = resp.get("next_cursor")
 
 def iter_all_pages():
-    """Veritabanındaki TÜM sayfaları sayfalamayla getirir (örn. toplu cover set için)."""
+    """TÜM sayfaları döndürür (sayfalama ile)."""
     page_size = 100
     start_cursor = None
     while True:
