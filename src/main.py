@@ -91,7 +91,7 @@ def main():
     # --- Force recent mode ---
     if args.force_recent and args.force_recent > 0:
         print(f"Running recent sync (last {args.force_recent})")
-        pages = nz.iter_recent_pages(force_recent=args.force_recent)
+     pages = nz.iter_recent_pages(force_recent=args.force_recent, by="created")
         updated = 0
 
         for idx, page in enumerate(pages, start=1):
