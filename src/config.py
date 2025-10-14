@@ -9,26 +9,26 @@ OMDB_API_KEY = os.getenv("OMDB_API_KEY", "")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 
 # --- Notion column mapping (property names)
-# Sağ taraftakileri birebir Notion veritabanındaki kolon adlarınla eşleştir.
-NOTION_COLS = {
-    "name": "Name",   # <-- title tipindeki property adı
-    "letterboxd": "Letterboxd",
-    "year": "Year",
-    "runtime": "Runtime (min)",
-    "poster": "Poster",
-    "backdrop": "Backdrop",
-    "trailer_url": "Trailer",
-    "original_title": "Original Title",
-    "synopsis": "Synopsis",
+# ÖNEMLİ: Sağ taraftaki değerler Notion'daki kolon isimleriyle TAM OLARAK eşleşmeli!
+# Büyük/küçük harf, boşluk, parantez - hepsi önemli.
 
-    # multi-select olarak kullanacağınlar:
+NOTION_COLS = {
+    "name": "Name",                    # Title property
+    "letterboxd": "Letterboxd",        # URL
+    "year": "Year",                    # Number
+    "runtime": "Runtime (min)",        # Number
+    "poster": "Poster",                # URL
+    "backdrop": "Backdrop",            # URL
+    "trailer_url": "Trailer URL",      # URL - DİKKAT: "Trailer URL" (boşluk var!)
+    "original_title": "Original Title", # Text
+    "synopsis": "Synopsis",            # Text
+    
+    # Multi-select properties
     "director": "Director",
     "writer": "Writer",
     "cinematography": "Cinematography",
     "cast_top": "Cast (Top 3)",
     "countries": "Countries",
     "languages": "Languages",
-
-    # MUBI bölgeleri (multi-select)
     "mubi": "MUBI",
 }
