@@ -233,9 +233,23 @@ def mode_force_recent(args) -> int:
 
 
 # ------------------------------
-# Mod: Normal doldurma
+# Mod: MUBI availability yenile
 # ------------------------------
-def mode_normal(args) -> int:
+def mode_refresh_mubi(args) -> int:
+    """Tüm sayfalarda MUBI availability'yi yenile (TMDb ID gerekli)"""
+    mode = args.refresh_mubi or "all"
+    print(f"[info] Refreshing MUBI availability (mode={mode})")
+    
+    updated = 0
+    pages = nz.iter_all_pages()
+    
+    for idx, page in enumerate(pages, start=1):
+        props = page["properties"]
+        pid = page["id"]
+        
+        # TMDb ID'yi bul (Letterboxd'den parse ederiz)
+        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
+        if not lb_url:
     limit = args.limit or 0
     print(f"[info] Starting normal sync (limit={limit if limit > 0 else 'unlimited'})")
 
