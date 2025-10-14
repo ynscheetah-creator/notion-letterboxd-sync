@@ -11,7 +11,7 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 # --- Notion column mapping (property names)
 # Sağ taraftakileri birebir Notion veritabanındaki kolon adlarınla eşleştir.
 NOTION_COLS = {
-    "name": "Name",
+    "name": "Name",   # <-- title tipindeki property adı
     "letterboxd": "Letterboxd",
     "year": "Year",
     "runtime": "Runtime (min)",
