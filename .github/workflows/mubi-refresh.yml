@@ -1,26 +1,48 @@
-name: Refresh MUBI availability (daily ALL)
+name: Refresh MUBI availability
 
 on:
   schedule:
-    - cron: "5 3 * * *"   # 06:05 TRT
+    - cron: "5 3 * * *"   # 06:05 TRT (her gün)
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Refresh mode"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - recent
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install deps
-        run: pip install -r requirements.txt
-      - name: Refresh MUBI for ALL pages
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Refresh MUBI availability
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
           set -euo pipefail
-          echo "Refreshing MUBI for ALL pages (daily run)"
-          python -m src.main --refresh-mubi all
+          
+          MODE="${{ github.event.inputs.mode }}"
+          MODE="${MODE:-all}"
+          
+          echo "Starting MUBI refresh (mode: ${MODE})"
+          python -m src.main --refresh-mubi "${MODE}"
+          echo "MUBI refresh completed successfully!"
