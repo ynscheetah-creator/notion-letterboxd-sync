@@ -95,6 +95,14 @@ def get_page_title(props: dict) -> str | None:
                 return txt
     return None
 
+# ---------- debug helper ----------
+def debug_page_props(props: Dict[str, Any]) -> None:
+    """Debug: Bir sayfanın property'lerini yazdır"""
+    print("[DEBUG] Page properties:")
+    for key, col in NOTION_COLS.items():
+        val = read_prop(props, col)
+        print(f"  {key:20} ({col:20}): {val}")
+
 # ---------- iterators ----------
 def iter_pages_needing_fill(limit: int = 0):
     """
