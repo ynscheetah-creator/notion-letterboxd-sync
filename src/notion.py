@@ -174,7 +174,23 @@ def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, An
     for k in ("director", "writer", "cinematography", "cast_top", "countries", "languages"):
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _multi(_as_list(data[k]))
-
+# ---- PAGE TITLE (Notion title property) ----
+page_title = data.get("__page_title")
+if page_title:
+    # mapping'te name varsa onu kullan
+    title_col = NOTION_COLS.get("name")
+    # yoksa mevcut property'ler içinden type=title olanı bul
+    if not title_col and existing_props:
+        for k, v in existing_props.items():
+            if v.get("type") == "title":
+                title_col = k
+                break
+    if title_col:
+        props[title_col] = {
+            "title": [
+                {"type": "text", "text": {"content": str(page_title)}}
+            ]
+        }
     # Cover from backdrop
     cover_payload = None
     if data.get("backdrop"):
