@@ -1,4 +1,57 @@
-# src/main.py
+# ------------------------------
+# Mod: Streaming availability yenile
+# ------------------------------
+def mode_refresh_mubi(args) -> int:
+    """Tüm sayfalarda streaming availability'yi yenile (TR + MUBI global)"""
+    mode = args.refresh_mubi or "all"
+    print(f"[info] Refreshing streaming availability (mode={mode})")
+    
+    updated = 0
+    skipped = 0
+    
+    for idx, page in enumerate(nz.iter_all_pages(), start=1):
+        props = page["properties"]
+        pid = page["id"]
+        
+        # TMDb ID'yi bul
+        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
+        if not lb_url:
+            skipped += 1
+            continue
+        
+        # Letterboxd'den TMDb ID al
+        try:
+            meta = lb.parse(lb_url) or {}
+            tmdb_id = meta.get("tmdb_id")
+            
+            if not tmdb_id:
+                print(f"[{idx}] No TMDb ID for {lb_url}")
+                skipped += 1
+                continue
+            
+            # Streaming bilgilerini getir
+            streaming_data = tmdb.get_streaming_availability(tmdb_id)
+            
+            # Mevcut değeri kontrol et
+            current_streaming = nz.read_prop(props, NOTION_COLS.get("streaming")) or []
+            
+            # Değişiklik varsa güncelle
+            if set(streaming_data) != set(current_streaming):
+                payload = {
+                    NOTION_COLS["streaming"]: nz._multi(streaming_data)
+                }
+                nz.update_page(pid, payload, existing_props=props)
+                updated += 1
+                print(f"[{idx}] Updated streaming: {streaming_data}")
+            else:
+                print(f"[{idx}] Streaming unchanged: {streaming_data}")
+                
+        except Exception as e:
+            print(f"[{idx}] Error: {e}")
+            skipped += 1
+    
+    print(f"[done] Updated {updated} pages, skipped {skipped}")
+    return updated# src/main.py
 from __future__ import annotations
 
 import argparse
@@ -196,6 +249,17 @@ def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]
         synopsis = tmd.get("synopsis") or omd.get("Plot")
         if synopsis and synopsis != "N/A":
             payload[NOTION_COLS["synopsis"]] = nz._rich(synopsis)
+    
+    # --- Streaming (TR platformları + MUBI global)
+    if _need(props, "streaming"):
+        if meta.get("tmdb_id"):
+            try:
+                streaming_data = tmdb.get_streaming_availability(meta["tmdb_id"])
+                if streaming_data:
+                    payload[NOTION_COLS["streaming"]] = nz._multi(streaming_data)
+                    print(f"[debug] Setting streaming: {streaming_data}")
+            except Exception as e:
+                print(f"[warn] Failed to fetch streaming data: {e}")
 
     return payload
 
@@ -366,7 +430,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--set-covers", action="store_true", 
                    help="Backdrop URL'lerini cover olarak ayarla (tek seferlik)")
     p.add_argument("--refresh-mubi", type=str, default="", 
-                   help="MUBI availability'yi yenile (all/recent)")
+                   help="Streaming availability'yi yenile - TR platformları + MUBI global (all/recent)")
     p.add_argument("--dry-run", action="store_true", 
                    help="Sadece ne yapacağını göster, Notion'a yazma")
     return p
