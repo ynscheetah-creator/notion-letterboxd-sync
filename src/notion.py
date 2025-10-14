@@ -105,33 +105,40 @@ def update_cover(page_id: str, url: Optional[str]) -> None:
 
 def update_page(page_id: str, data: Dict[str, Any], existing_props: Optional[Dict[str, Any]] = None) -> None:
     props: Dict[str, Any] = {}
+    existing_names = set((existing_props or {}).keys())
+
+    def _can(col_key: str) -> bool:
+        """NOTION_COLS[col_key] mevcut sayfa properties'inde var mı?"""
+        name = NOTION_COLS.get(col_key)
+        return bool(name) and (not existing_names or name in existing_names)
 
     # Numbers
-    if "year" in data and NOTION_COLS.get("year"):
+    if "year" in data and _can("year"):
         props[NOTION_COLS["year"]] = _num(data["year"])
-    if "runtime" in data and NOTION_COLS.get("runtime"):
+    if "runtime" in data and _can("runtime"):
         props[NOTION_COLS["runtime"]] = _num(data["runtime"])
 
     # Text
-    for k in ("original_title", "synopsis"):
-        if k in data and NOTION_COLS.get(k):
-            props[NOTION_COLS[k]] = _txt(data[k])
+    if "original_title" in data and _can("original_title"):
+        props[NOTION_COLS["original_title"]] = _txt(data["original_title"])
+    if "synopsis" in data and _can("synopsis"):
+        props[NOTION_COLS["synopsis"]] = _txt(data["synopsis"])
 
     # URL
     for k in ("poster", "backdrop", "trailer_url"):
-        if k in data and NOTION_COLS.get(k):
+        if k in data and _can(k):
             props[NOTION_COLS[k]] = _url(data[k])
 
     # Multi-select
     for k in ("director", "writer", "cinematography", "cast_top", "countries", "languages"):
-        if k in data and NOTION_COLS.get(k):
+        if k in data and _can(k):
             props[NOTION_COLS[k]] = _multi(_as_list(data[k]))
 
-    # MUBI (multi-select)
-    if "mubi" in data and NOTION_COLS.get("mubi"):
+    # MUBI
+    if "mubi" in data and _can("mubi"):
         props[NOTION_COLS["mubi"]] = _multi(list(data["mubi"]), limit=100)
 
-    # Cover
+    # Cover (cover alanı page-level, property değil)
     cover_payload = None
     if data.get("backdrop"):
         cover_payload = {"type": "external", "external": {"url": data["backdrop"]}}
@@ -144,7 +151,6 @@ def update_page(page_id: str, data: Dict[str, Any], existing_props: Optional[Dic
 
     if len(kwargs) > 1:
         client.pages.update(**kwargs)
-
 # -----------------------------
 # Queries
 # -----------------------------
