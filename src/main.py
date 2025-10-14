@@ -127,13 +127,14 @@ def main():
         return
 
     # --- Force recent (son N sayfa) ---
-    if args.force_recent and args.force_recent > 0:
-        print(f"Running recent sync (last {args.force_recent})")
-        pages = nz.iter_recent_pages(force_recent=args.force_recent)
-        updated = 0
-        for idx, page in enumerate(pages, start=1):
-            props = page["properties"]
-            pid = page["id"]
+if args.force_recent and args.force_recent > 0:
+    print(f"Running recent sync (last {args.force_recent})")
+    pages = nz.iter_recent_pages(force_recent=args.force_recent)
+    print(f"[debug] Found {len(pages)} recent pages")
+else:
+    print(f"Running normal sync (limit {args.limit})")
+    pages = nz.iter_pages_needing_fill(limit=args.limit)
+    print(f"[debug] Found {len(pages)} pages needing fill")
 
             # Letterboxd link varsa devam edelim
             lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
@@ -144,12 +145,20 @@ def main():
             current_title = nz.get_page_title(props) or ""
             need_title = (not current_title or current_title.lower() == "new page")
 
-            # Letterboxd meta
-            meta = None
-            try:
-                meta = lb.parse(lb_url)
-            except Exception:
-                meta = None
+# Letterboxd meta
+meta = None
+try:
+    meta = lb.parse(lb_url)
+except Exception:
+    meta = None
+
+payload: Dict[str, Any] = {}
+
+# ... OMDb/TMDb payloadlarını birleştirdiğiniz yer kalabilir ...
+
+# >>> YENİ: Sayfa başlığı boşsa ve LB başlık geldiyse payload'a koy
+if need_title and meta and meta.get("title"):
+    payload["__page_title"] = meta["title"]
 
             payload: Dict[str, Any] = {}
             title_guess = None
