@@ -222,17 +222,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+# src/main.py (son kısım)
+
 def main():
     args = build_arg_parser().parse_args()
 
     if args.force_recent and args.force_recent > 0:
-        return mode_force_recent(args)
+        updated = mode_force_recent(args)
+    else:
+        updated = mode_normal(args)
 
-    # set-covers için ayrıca bir iş mantığın varsa burada ele alabilirsin:
-    # if args.set_covers: ...
-
-    return mode_normal(args)
-
+    print(f"[ok] Updated {updated} pages.")
+    return 0  # <-- HER ZAMAN 0 DÖN
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import sys
+    sys.exit(main())  # main 0 döndüğü için job success olur
