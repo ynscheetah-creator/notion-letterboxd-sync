@@ -111,41 +111,43 @@ def update_page(page_id: str, data: Dict[str, Any], existing_props: Optional[Dic
     existing_names = set((existing_props or {}).keys())
 
     def _can(col_key: str) -> bool:
-        """NOTION_COLS[col_key] mevcut sayfa properties'inde var mı?"""
+        """Check if this property exists in the Notion page."""
         name = NOTION_COLS.get(col_key)
         return bool(name) and (not existing_names or name in existing_names)
-        
-# ---- Page title (title property) ----
-if "title" in data and NOTION_COLS.get("name"):
-    props[NOTION_COLS["name"]] = _title(data["title"])
-    
-    # Numbers
+
+    # ---- Page title (title property) ----
+    if "title" in data and NOTION_COLS.get("name"):
+        props[NOTION_COLS["name"]] = {
+            "title": [{"type": "text", "text": {"content": data["title"]}}]
+        }
+
+    # ---- Numbers ----
     if "year" in data and _can("year"):
         props[NOTION_COLS["year"]] = _num(data["year"])
     if "runtime" in data and _can("runtime"):
         props[NOTION_COLS["runtime"]] = _num(data["runtime"])
 
-    # Text
+    # ---- Text ----
     if "original_title" in data and _can("original_title"):
         props[NOTION_COLS["original_title"]] = _txt(data["original_title"])
     if "synopsis" in data and _can("synopsis"):
         props[NOTION_COLS["synopsis"]] = _txt(data["synopsis"])
 
-    # URL
+    # ---- URL fields ----
     for k in ("poster", "backdrop", "trailer_url"):
         if k in data and _can(k):
             props[NOTION_COLS[k]] = _url(data[k])
 
-    # Multi-select
+    # ---- Multi-select fields ----
     for k in ("director", "writer", "cinematography", "cast_top", "countries", "languages"):
         if k in data and _can(k):
             props[NOTION_COLS[k]] = _multi(_as_list(data[k]))
 
-    # MUBI
+    # ---- MUBI (multi-select, limited to 100 tags) ----
     if "mubi" in data and _can("mubi"):
         props[NOTION_COLS["mubi"]] = _multi(list(data["mubi"]), limit=100)
 
-    # Cover (cover alanı page-level, property değil)
+    # ---- Cover ----
     cover_payload = None
     if data.get("backdrop"):
         cover_payload = {"type": "external", "external": {"url": data["backdrop"]}}
