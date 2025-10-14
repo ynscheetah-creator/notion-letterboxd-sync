@@ -1,0 +1,30 @@
+name: Refresh MUBI availability (daily ALL)
+
+on:
+  schedule:
+    # Her gün Türkiye saati 06:00 (UTC 03:00) çalışsın
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Refresh MUBI for ALL pages
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo "Refreshing MUBI for ALL pages (daily run)"
+          python -m src.main --refresh-mubi --force-recent 0
