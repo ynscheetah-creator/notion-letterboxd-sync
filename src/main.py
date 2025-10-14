@@ -31,7 +31,6 @@ def _payload_from_omdb(d: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 def _payload_from_tmdb(d: Dict[str, Any]) -> Dict[str, Any]:
-    # Burada TMDb tarafında ayrı detaylarınız varsa ekleyebilirsiniz.
     if not d: return {}
     return {
         "year": d.get("year"),
@@ -49,19 +48,26 @@ def _payload_from_tmdb(d: Dict[str, Any]) -> Dict[str, Any]:
         "trailer_url": d.get("trailer_url"),
     }
 
+def _as_set(v) -> set[str]:
+    if not v: return set()
+    if isinstance(v, (list, tuple, set)): return {str(x).strip() for x in v if str(x).strip()}
+    return {s.strip() for s in str(v).split(",") if s.strip()}
+
 def main():
     ap = argparse.ArgumentParser("Notion × Letterboxd sync")
-    ap.add_argument("--limit", type=int, default=0, help="İşlenecek satır (normal mod).")
-    ap.add_argument("--dry-run", action="store_true", help="Yazmadan logla.")
-    ap.add_argument("--set-covers", action="store_true", help="Backdrop -> cover (tek seferlik).")
-    ap.add_argument("--force-recent", type=int, default=0, help="Son N sayfayı zorla işle.")
-    ap.add_argument("--recent-by", choices=("edited","created"), default="edited",
-                    help="force-recent sıralaması: edited|created")
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--set-covers", action="store_true")
+    ap.add_argument("--force-recent", type=int, default=0)
+    ap.add_argument("--recent-by", choices=("edited","created"), default="edited")
+    # YENİ: yalnızca MUBI alanını güncelle
+    ap.add_argument("--refresh-mubi", action="store_true",
+                    help="Sadece MUBI ülkelerini tazele (force-recent ile sınırla).")
     args = ap.parse_args()
 
     print("[debug] starting...")
 
-    # ---- tek seferlik kapak
+    # --- tek seferlik kapak
     if args.set_covers:
         print("[cover] Set covers from Backdrop")
         scanned=fixed=0
@@ -75,35 +81,97 @@ def main():
         print(f"[cover] Done. scanned={scanned} set={fixed}")
         return
 
-    # ---- force recent modu
+       # --- YALNIZCA MUBI TAZELEME (tüm sayfalar veya son N sayfa) ---
+    if args.refresh_mubi:
+        # force_recent=0 veya verilmemişse -> TÜM SAYFALAR
+        n = args.force_recent if args.force_recent is not None else 0
+        scan_all = (n == 0)
+
+        if scan_all:
+            print("[mubi] refreshing MUBI regions for ALL pages")
+            pages_iter = nz.iter_all_pages()
+        else:
+            print(f"[mubi] refreshing MUBI regions for last {n} pages (by={args.recent_by})")
+            pages_iter = nz.iter_recent_pages(force_recent=max(1, n), by=args.recent_by)
+
+        updated = 0
+        scanned = 0
+
+        for page in pages_iter:
+            scanned += 1
+            props = page["properties"]
+            pid = page["id"]
+
+            lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
+            if not lb_url:
+                continue
+
+            # Eski MUBI
+            old_mubi = {*(nz.read_prop(props, NOTION_COLS.get("mubi")) or [])}
+
+            # Letterboxd -> TMDb id
+            meta = None
+            try:
+                meta = lb.parse(lb_url)
+            except Exception:
+                meta = None
+
+            tmdb_id = (meta or {}).get("tmdb_id")
+            if not tmdb_id:
+                continue
+
+            # TMDb watch/providers -> MUBI bölgeleri
+            try:
+                new_regions = set(tmdb.mubi_regions_for_movie(tmdb_id))
+            except Exception as e:
+                print(f"[mubi] providers error ({lb_url}): {e}")
+                continue
+
+            # Değişiklik yoksa geç
+            if new_regions == old_mubi:
+                continue
+
+            payload = {"mubi": sorted(new_regions)}
+            if args.dry_run:
+                print(f"[mubi][dry] {lb_url}: {sorted(old_mubi)} -> {sorted(new_regions)}")
+            else:
+                nz.update_page(pid, payload)
+                updated += 1
+                time.sleep(0.18)  # Notion / TMDb rate-limit için minik uyku
+
+            # İsteğe bağlı: her 200 sayfada bir durum yaz
+            if scanned % 200 == 0:
+                print(f"[mubi] progress: scanned={scanned}, updated={updated}")
+
+        print(f"[mubi] Done. scanned={scanned}, updated={updated}")
+        return
+
+    # --- force recent (tam doldurma)
     if args.force_recent and args.force_recent > 0:
         print(f"Running recent sync (last {args.force_recent})")
         pages = nz.iter_recent_pages(force_recent=args.force_recent, by=args.recent_by)
         updated = 0
 
-        for idx, page in enumerate(pages, start=1):
+        for page in pages:
             props = page["properties"]; pid = page["id"]
 
             lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
-            if not lb_url:  # Letterboxd yoksa pas
+            if not lb_url:
                 continue
 
-            # sayfa başlığı
             current_title = nz.get_page_title(props) or ""
             need_title = (not current_title) or (current_title.strip().lower()=="new page")
 
-            # Letterboxd meta
             meta = None
             try: meta = lb.parse(lb_url)
             except Exception: meta=None
 
             payload: Dict[str, Any] = {}
 
-            # başlık/yıl güncelle
             if need_title and meta and meta.get("title"):
-                payload["original_title"] = meta["title"]   # name'i doğrudan değiştirmek yerine burada tutuyoruz
+                payload["original_title"] = meta["title"]
 
-            # OMDb -> önce IMDb id ile
+            # OMDb
             try:
                 om = omdb.get_by_imdb(meta.get("imdb_id")) if meta and meta.get("imdb_id") else None
                 if not om and meta and meta.get("title"):
@@ -111,7 +179,7 @@ def main():
             except Exception: om=None
             if om: _merge(payload, _payload_from_omdb(om))
 
-            # TMDb fallback + MUBI bölgeleri
+            # MUBI
             try:
                 if meta and meta.get("tmdb_id"):
                     regs = tmdb.mubi_regions_for_movie(meta["tmdb_id"])
@@ -130,8 +198,8 @@ def main():
         print(f"Done. Updated {updated} pages.")
         return
 
-    # ---- normal mod (eksik alanları doldurmak için – isterseniz burada kendi kriterinizi kullanın)
-    print("[debug] normal mode disabled in this minimal template — use --force-recent")
+    # --- normal mod devre dışı (sadece force-recent veya refresh-mubi kullanıyoruz)
+    print("[debug] normal mode disabled — use --force-recent or --refresh-mubi")
     print("Done. Updated 0 pages.")
 
 if __name__ == "__main__":
