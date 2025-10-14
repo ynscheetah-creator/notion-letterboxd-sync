@@ -174,12 +174,13 @@ def main():
             if not payload and not need_title:
                 continue
 
-            if args.dry_run:
-                print(f"[dry] Would update {title_guess or current_title}: {payload}")
-            else:
-                nz.update_page(pid, payload, existing_props=props)
-                updated += 1
-                _safe_sleep()
+        if args.dry_run:
+            print(f"[dry] Would update {title_guess}: {payload}")
+        else:
+            nz.update_page(pid, payload, existing_props=props)
+            print(f"[ok] Updated → {title_guess or '(no title)'}  [{pid[:6]}]")
+            updated += 1
+            time.sleep(0.2)
 
         print(f"Done. Updated {updated} pages.")
         return
