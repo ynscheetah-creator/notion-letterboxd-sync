@@ -88,40 +88,77 @@ def _multi(items: list[str], limit: int = 100) -> dict:
         if len(uniq) >= limit:
             break
     return {"multi_select": uniq}
-def update_page(page_id: str, data: Dict[str, Any]) -> None:
+def _as_list(x: Any) -> List[str]:
+    if x is None:
+        return []
+    if isinstance(x, (list, tuple, set)):
+        return [str(i).strip() for i in x if str(i).strip()]
+    return [p.strip() for p in str(x).split(",") if p.strip()]
+
+def _multi(items: Optional[List[str]], limit: int | None = None) -> Dict[str, Any]:
+    """
+    Notion multi_select payload. Boşları ve tekrarları eler.
+    limit verilirse en fazla o kadar seçenek döner (Notion limiti genelde 100).
+    """
+    arr: List[Dict[str, str]] = []
+    if items:
+        seen: set[str] = set()
+        for it in items:
+            name = str(it).strip()
+            if not name or name in seen:
+                continue
+            arr.append({"name": name})
+            seen.add(name)
+            if limit and len(arr) >= limit:
+                break
+    return {"multi_select": arr}
+
+def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, Any] | None = None) -> None:
+    """
+    Python dict -> Notion properties + cover.
+    Multi-select: director/writer/cinematography/cast_top/countries/languages + MUBI
+    URL: poster/backdrop/trailer_url
+    Number: year/runtime
+    """
     props: Dict[str, Any] = {}
 
-    # numbers
-    for k in ("year","runtime"):
-        if k in data and NOTION_COLS.get(k):
-            props[NOTION_COLS[k]] = _num(data[k])
+    # Numbers
+    if "year" in data and NOTION_COLS.get("year"):
+        props[NOTION_COLS["year"]] = _num(data["year"])
+    if "runtime" in data and NOTION_COLS.get("runtime"):
+        props[NOTION_COLS["runtime"]] = _num(data["runtime"])
 
-    # text
-    for k in ("original_title","synopsis"):
+    # Text
+    for k in ("original_title", "synopsis"):
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _txt(data[k])
 
-    # urls
-    for k in ("poster","backdrop","trailer_url"):
+    # URLs
+    for k in ("poster", "backdrop", "trailer_url"):
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _url(data[k])
 
-# örnek: update_page içindeki multi-select setleri
-for k in ("director", "writer", "cinematography", "cast_top", "countries", "languages"):
-    if k in data and NOTION_COLS.get(k):
-        props[NOTION_COLS[k]] = _multi(nz_as_list(data[k]))
+    # Multi-select (standart alanlar)
+    for k in ("director", "writer", "cinematography", "cast_top", "countries", "languages"):
+        if k in data and NOTION_COLS.get(k):
+            props[NOTION_COLS[k]] = _multi(_as_list(data[k]))
 
-# MUBI (ülke kodları) — ayrı ele alıp limit veriyoruz
-if "mubi" in data and NOTION_COLS.get("mubi"):
-    props[NOTION_COLS["mubi"]] = _multi(list(data["mubi"]), limit=100)
+    # MUBI (ülke kodları multi-select) — Notion sınırı için limit=100
+    if "mubi" in data and NOTION_COLS.get("mubi"):
+        props[NOTION_COLS["mubi"]] = _multi(_as_list(data["mubi"]), limit=100)
 
+    # Cover: backdrop varsa kapak yap
     cover_payload = None
     if data.get("backdrop"):
-        cover_payload = {"type":"external","external":{"url":data["backdrop"]}}
+        cover_payload = {"type": "external", "external": {"url": data["backdrop"]}}
 
+    # Final update call
     kwargs: Dict[str, Any] = {"page_id": page_id}
-    if props: kwargs["properties"] = props
-    if cover_payload: kwargs["cover"] = cover_payload
+    if props:
+        kwargs["properties"] = props
+    if cover_payload:
+        kwargs["cover"] = cover_payload
+
     if len(kwargs) > 1:
         client.pages.update(**kwargs)
 
