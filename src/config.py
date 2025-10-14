@@ -19,7 +19,7 @@ NOTION_COLS = {
     "backdrop": "Backdrop",
     "trailer_url": "Trailer",
     "original_title": "Original Title",
-    "synopsis": "Overview / Plot",
+    "synopsis": "Synopsis",
 
     # multi-select olarak kullanacağınlar:
     "director": "Director",
