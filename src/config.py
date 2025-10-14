@@ -30,5 +30,7 @@ NOTION_COLS = {
     "cast_top": "Cast (Top 3)",
     "countries": "Countries",
     "languages": "Languages",
-    "mubi": "MUBI",
+    
+    # Streaming availability (tek kolon)
+    "streaming": "Streaming",  # TR platformları + MUBI global (MUBI-CA, MUBI-US...)
 }
