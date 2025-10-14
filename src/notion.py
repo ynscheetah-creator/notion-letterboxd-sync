@@ -110,3 +110,22 @@ def iter_recent_pages(force_recent: int = 50, by: str = "edited"):
     payload = {"database_id": NOTION_DATABASE_ID, "sorts": sorts, "page_size": force_recent}
     resp = client.databases.query(**payload)
     return resp.get("results", [])
+# --- Tüm sayfaları sayfalayarak döndür (MUBI taraması vb. için) ---
+def iter_all_pages(page_size: int = 100):
+    """
+    Veritabanındaki TÜM sayfaları döndürür.
+    Notion pagination (start_cursor) kullanır.
+    """
+    start_cursor = None
+    while True:
+        payload = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+        resp = client.databases.query(**payload)
+
+        for page in resp.get("results", []):
+            yield page
+
+        if not resp.get("has_more"):
+            break
+        start_cursor = resp.get("next_cursor")
