@@ -106,15 +106,13 @@ def update_page(page_id: str, data: Dict[str, Any]) -> None:
         if k in data and NOTION_COLS.get(k):
             props[NOTION_COLS[k]] = _url(data[k])
 
-    # multi-select
-    for k in ("director","writer","cinematography","cast_top","countries","languages","mubi"):
-        if k in data and NOTION_COLS.get(k):
-            v = data[k]
-            if v is None: v=[]
-            elif not isinstance(v,(list,tuple,set)):
-                v = [s.strip() for s in str(v).split(",") if s.strip()]
-            props[NOTION_COLS[k]] = _multi(list(v))
-            if "mubi" in data and NOTION_COLS.get("mubi"):
+# örnek: update_page içindeki multi-select setleri
+for k in ("director", "writer", "cinematography", "cast_top", "countries", "languages"):
+    if k in data and NOTION_COLS.get(k):
+        props[NOTION_COLS[k]] = _multi(nz_as_list(data[k]))
+
+# MUBI (ülke kodları) — ayrı ele alıp limit veriyoruz
+if "mubi" in data and NOTION_COLS.get("mubi"):
     props[NOTION_COLS["mubi"]] = _multi(list(data["mubi"]), limit=100)
 
     cover_payload = None
