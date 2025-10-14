@@ -10,6 +10,9 @@ client = Client(auth=NOTION_TOKEN)
 # -----------------------------
 # Builders
 # -----------------------------
+def _title(val: Optional[str]) -> Dict[str, Any]:
+    s = (str(val) if val is not None else "").strip()
+    return {"title": [{"type": "text", "text": {"content": s}}]} if s else {"title": []}
 def _txt(val: Optional[str]) -> Dict[str, Any]:
     if not val:
         return {"rich_text": []}
@@ -111,7 +114,11 @@ def update_page(page_id: str, data: Dict[str, Any], existing_props: Optional[Dic
         """NOTION_COLS[col_key] mevcut sayfa properties'inde var mı?"""
         name = NOTION_COLS.get(col_key)
         return bool(name) and (not existing_names or name in existing_names)
-
+        
+# ---- Page title (title property) ----
+if "title" in data and NOTION_COLS.get("name"):
+    props[NOTION_COLS["name"]] = _title(data["title"])
+    
     # Numbers
     if "year" in data and _can("year"):
         props[NOTION_COLS["year"]] = _num(data["year"])
