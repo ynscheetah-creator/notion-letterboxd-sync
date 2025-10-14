@@ -93,20 +93,25 @@ def fetch_by_title(title: str, year: Optional[int] = None) -> Dict[str, Any]:
 
 def get_providers_mubi(tmdb_id: str) -> List[str]:
     """
-    TMDb watch/providers endpoint'inden MUBI'nin bulunduğu ülke kodlarını döndürür.
+    TMDb watch/providers endpoint'inden MUBI availability kontrol eder.
+    MUBI'de varsa ["MUBI"] döndürür, yoksa boş liste döndürür.
     """
     if not tmdb_id:
         return []
     d = _get(f"{BASE}/movie/{tmdb_id}/watch/providers")
     if not d:
         return []
+    
     res = d.get("results", {})
-    out: List[str] = []
+    
+    # Herhangi bir ülkede MUBI'de var mı kontrol et
     for cc, payload in res.items():
-        fl = payload.get("flatrate") or []
-        if any((it.get("provider_name") == "MUBI") for it in fl):
-            out.append(cc)
-    return sorted(out)
+        flatrate = payload.get("flatrate") or []
+        for provider in flatrate:
+            if provider.get("provider_name") == "MUBI":
+                return ["MUBI"]  # Bulunca hemen döndür
+    
+    return []  # Hiçbir ülkede yok
 
 # Geriye uyumluluk için eski isimler
 get_by_id = fetch_movie
