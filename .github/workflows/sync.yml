@@ -2,93 +2,43 @@ name: Fill missing fields
 
 on:
   schedule:
-    # Türkiye saati 08:00 (UTC 05:00)
-    - cron: "0 5 * * *"
-    # Türkiye saati 23:00 (UTC 20:00)
-    - cron: "0 20 * * *"
+    - cron: "0 5 * * *"    # 08:00 TRT
+    - cron: "0 20 * * *"   # 23:00 TRT
   workflow_dispatch:
     inputs:
+      force_recent:
+        description: "Son N sayfayı zorla (boş bırak=devre dışı)"
+        required: false
+        default: ""
       set_covers:
-        description: "Backdrop URL'leri cover olarak ayarla (tek seferlik)"
+        description: "Backdrop URL'lerini cover olarak ayarla (tek seferlik)"
         required: false
         default: "false"
-        type: choice
-        options: ["false", "true"]
-      force_recent:
-        description: "Son N sayfayı zorla tara (0=kapalı)"
-        required: false
-        default: "0"
-      limit:
-        description: "İşlenecek sayfa üst sınırı (0=limitsiz)"
-        required: false
-        default: "0"
-
-permissions:
-  contents: read
-
-concurrency:
-  group: notion-letterboxd-sync
-  cancel-in-progress: false
 
 jobs:
   sync:
-    name: Fill missing fields
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install deps
-        run: |
-          pip install -r requirements.txt
-
+        run: pip install -r requirements.txt
       - name: Run sync
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          # workflow_dispatch input'ları (schedule tetiklerinde boş gelir)
-          INPUT_SET_COVERS: ${{ github.event.inputs.set_covers }}
-          INPUT_FORCE_RECENT: ${{ github.event.inputs.force_recent }}
-          INPUT_LIMIT: ${{ github.event.inputs.limit }}
         run: |
           set -euo pipefail
-
-          # Varsayılanlar (schedule tetiklerinde boş olacağı için)
-          SET_COVERS="${INPUT_SET_COVERS:-false}"
-          FORCE_RECENT="${INPUT_FORCE_RECENT:-0}"
-          LIMIT="${INPUT_LIMIT:-0}"
-
-          echo "Params -> set_covers=$SET_COVERS force_recent=$FORCE_RECENT limit=$LIMIT"
-
-          if [ "$SET_COVERS" = "true" ]; then
-            echo "Running cover fixer (--set-covers)"
-            if [ "$LIMIT" != "0" ]; then
-              python -m src.main --set-covers --limit "$LIMIT"
-            else
-              python -m src.main --set-covers
-            fi
-
-          elif [ "${FORCE_RECENT:-0}" != "0" ]; then
-            echo "Running recent sync (last $FORCE_RECENT)"
-            if [ "$LIMIT" != "0" ]; then
-              python -m src.main --force-recent "$FORCE_RECENT" --limit "$LIMIT"
-            else
-              python -m src.main --force-recent "$FORCE_RECENT"
-            fi
-
+          FORCE_RECENT="${{ github.event.inputs.force_recent }}"
+          SET_COVERS="${{ github.event.inputs.set_covers }}"
+          if [ "${SET_COVERS}" = "true" ]; then
+            python -m src.main --set-covers
+          elif [ -n "${FORCE_RECENT}" ]; then
+            python -m src.main --force-recent "${FORCE_RECENT}"
           else
-            echo "Running normal sync"
-            if [ "$LIMIT" != "0" ]; then
-              python -m src.main --limit "$LIMIT"
-            else
-              python -m src.main
-            fi
+            python -m src.main
           fi
