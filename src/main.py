@@ -87,9 +87,8 @@ def main():
         return
 
     # --- normal / force-recent ---
-    if args.force_recent and args.force_recent > 0:
-        pages = nz.iter_recent_pages(force_recent=args.force_recent, by="last_edited_time")
-        print(f"Running recent sync (last {args.force_recent})")
+print(f"Running recent sync (last {args.force_recent})")
+pages = nz.iter_recent_pages(force_recent=args.force_recent, by="created")
     else:
         # Eski davranış: doldurulması gerekenleri tara
         pages = nz.iter_recent_pages(force_recent=5, by="last_edited_time")
