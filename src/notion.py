@@ -220,14 +220,26 @@ def iter_all_pages():
             break
         start_cursor = resp.get("next_cursor")
 
-def iter_recent_pages(force_recent: int) -> List[Dict[str, Any]]:
-    """Son düzenlenen N sayfayı getirir (last_edited_time DESC)."""
+def iter_recent_pages(force_recent: int, by: str = "created") -> List[Dict[str, Any]]:
+    """
+    Veritabanından sayfaları çekip yerelde sıralar.
+    by="created" -> created_time DESC
+    by="edited"  -> last_edited_time DESC
+    """
     if force_recent <= 0:
         return []
-    payload: Dict[str, Any] = {
-        "database_id": NOTION_DATABASE_ID,
-        "page_size": min(force_recent, 100),
-        "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
-    }
-    resp = client.databases.query(**payload)
-    return resp.get("results", [])[:force_recent]
+
+    # Notion DB query: büyük bir batch alalım (100'e kadar)
+    resp = client.databases.query(
+        **{
+            "database_id": NOTION_DATABASE_ID,
+            "page_size": 100,
+            # API sort yerine yerelde sıralayacağız; bazı workspaces'te created_time sort kısıtlı olabiliyor
+        }
+    )
+    pages = resp.get("results", [])
+
+    key = "created_time" if by == "created" else "last_edited_time"
+    pages.sort(key=lambda p: p.get(key, ""), reverse=True)
+
+    return pages[:force_recent]
