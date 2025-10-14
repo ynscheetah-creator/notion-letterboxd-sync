@@ -101,6 +101,36 @@ def get_page_title(props: Dict[str, Any]) -> Optional[str]:
 # -----------------------------
 # Update helpers
 # -----------------------------
+# --- Title helpers -------------------------------------------------
+def _title_prop_name(props: dict) -> str | None:
+    """Bu sayfadaki 'type=title' olan property adını bul."""
+    for k, v in props.items():
+        if v.get("type") == "title":
+            return k
+    return None
+
+def get_page_title(props: dict) -> str | None:
+    """Sayfa başlığını oku (hangi kolon ismi olursa olsun)."""
+    name_key = _title_prop_name(props)
+    if not name_key:
+        return None
+    return "".join(t.get("plain_text", "") for t in props[name_key].get("title", [])).strip() or None
+
+def set_page_title(page_id: str, props: dict, title: str) -> None:
+    """Sayfa başlığını yaz (hangi kolon ismi olursa olsun)."""
+    if not title:
+        return
+    name_key = _title_prop_name(props)
+    if not name_key:
+        return
+    client.pages.update(
+        page_id=page_id,
+        properties={
+            name_key: {
+                "title": [{"type": "text", "text": {"content": title}}]
+            }
+        },
+    )
 def update_cover(page_id: str, url: Optional[str]) -> None:
     if not url:
         return
@@ -158,7 +188,17 @@ def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, An
 
     if len(kwargs) > 1:
         client.pages.update(**kwargs)
-
+        # Başlık güvence: mevcut ad boşsa 'original_title' ya da 'title' yaz
+        try:
+            current_title = get_page_title(existing_props or {})
+            if not current_title or current_title.lower().startswith("new page"):
+                fallback_title = (
+                    str(data.get("original_title") or data.get("title") or "").strip()
+                )
+                if fallback_title:
+                    set_page_title(page_id, existing_props or {}, fallback_title)
+        except Exception:
+            pass
 # -----------------------------
 # Query helpers
 # -----------------------------
