@@ -69,3 +69,41 @@ def get_by_title(title: str, year: int | None = None):
     cred = _req(f"/movie/{mid}/credits").json()
     vids = _req(f"/movie/{mid}/videos").json()
     return _map(pick, cred, det, vids)
+    # src/tmdb.py (sonuna ekle)
+
+import requests
+from .config import TMDB_API_KEY
+
+_TMDB_BASE = "https://api.themoviedb.org/3"
+
+def _tmdb_get(path: str, params: dict | None = None):
+    p = {"api_key": TMDB_API_KEY}
+    if params:
+        p.update(params)
+    r = requests.get(f"{_TMDB_BASE}{path}", params=p, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+def mubi_regions_for_movie(tmdb_id: str | int) -> list[str]:
+    """
+    TMDb watch/providers verisini okuyup MUBI'nin bulunduğu ülke kodlarını döndürür.
+    Örn: ['DE','AT','TR']
+    """
+    if not tmdb_id:
+        return []
+    data = _tmdb_get(f"/movie/{tmdb_id}/watch/providers")
+    results = data.get("results", {})
+    regions: list[str] = []
+
+    for country_code, payload in results.items():
+        # flatrate + buy + rent hepsine bakmak istersen genişletebilirsin;
+        # MUBI genelde flatrate (abonelik) altında görünür
+        for bucket in ("flatrate",):
+            for prov in payload.get(bucket, []) or []:
+                name = (prov.get("provider_name") or "").lower()
+                if "mubi" in name:  # 'MUBI', 'MUBI Amazon Channel' vb.
+                    regions.append(country_code)
+                    break  # bu ülkeyi ekledik, diğer bucketlara bakmasak da olur
+
+    # alfabetik ve uniq
+    return sorted(set(regions))
