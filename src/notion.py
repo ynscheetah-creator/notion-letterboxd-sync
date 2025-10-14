@@ -92,15 +92,51 @@ def get_page_title(props: dict) -> str | None:
     return None
 
 # ---------- iterators ----------
-def iter_recent_pages(*, force_recent: int, by: str = "last_edited_time"):
-    """Son N sayfayı getir. by: 'last_edited_time' veya 'created_time'."""
-    payload = {
-        "database_id": NOTION_DATABASE_ID,
-        "page_size": force_recent,
-        "sorts": [{"timestamp": by, "direction": "descending"}],
-    }
-    resp = client.databases.query(**payload)
-    return resp.get("results", [])
+# src/notion.py
+
+def iter_recent_pages(force_recent: int = 20, by: str = "created"):
+    """
+    Veritabanındaki en yeni sayfaları getirir.
+    by: "created" -> created_time, "edited" -> last_edited_time
+    force_recent: kaç sayfa (en yeni) döndürülsün
+    """
+    if force_recent <= 0:
+        force_recent = 20
+
+    ts = "created_time" if by == "created" else "last_edited_time"
+
+    page_size = 100
+    start_cursor = None
+    yielded = 0
+
+    while yielded < force_recent:
+        payload = {
+            "database_id": NOTION_DATABASE_ID,
+            "page_size": page_size,
+            "sorts": [
+                {
+                    # ÖNEMLİ: property değil, timestamp!
+                    "timestamp": ts,
+                    "direction": "descending",
+                }
+            ],
+        }
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+
+        resp = client.databases.query(**payload)
+        pages = resp.get("results", [])
+        start_cursor = resp.get("next_cursor")
+        has_more = resp.get("has_more", False)
+
+        for page in pages:
+            yield page
+            yielded += 1
+            if yielded >= force_recent:
+                return
+
+        if not has_more:
+            break
 
 def iter_all_pages():
     page_size = 100
