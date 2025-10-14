@@ -1,209 +1,139 @@
+# src/main.py
 from __future__ import annotations
-import argparse
-import time
-from typing import Dict, Any
+import argparse, time
+from typing import Dict, Any, Optional
 
-import src.notion as nz
-import src.letterboxd as lb
-import src.omdb as omdb
-import src.tmdb as tmdb
-from src.config import NOTION_COLS
+from . import notion as nz
+from . import letterboxd as lb
+from . import omdb, tmdb
+from .config import NOTION_COLS
 
+def _merge(dst: Dict[str, Any], src: Optional[Dict[str, Any]]) -> None:
+    if not src: return
+    for k, v in src.items():
+        if v in (None, "", [], {}): continue
+        dst[k] = v
 
-def _merge_payload(base: Dict[str, Any], new: Dict[str, Any]) -> None:
-    """Yeni alanları mevcut payload’a ekler (boş olmayanları)."""
-    if not new:
-        return
-    for k, v in new.items():
-        if v in (None, "", [], {}):
-            continue
-        if k not in base:
-            base[k] = v
+def _from_omdb(d: Dict[str, Any]) -> Dict[str, Any]:
+    if not d: return {}
+    return {
+        "year": d.get("year"), "runtime": d.get("runtime"),
+        "director": d.get("director"), "writer": d.get("writer"),
+        "cinematography": d.get("cinematography"),
+        "poster": d.get("poster"), "backdrop": d.get("backdrop"),
+        "trailer_url": d.get("trailer_url"),
+        "original_title": d.get("original_title") or d.get("title"),
+        "synopsis": d.get("plot") or d.get("synopsis"),
+        "countries": d.get("countries"), "languages": d.get("languages"),
+        "cast_top": d.get("cast_top"),
+    }
 
-
-def _payload_from_omdb(d: Dict[str, Any]) -> Dict[str, Any]:
-    """OMDb sözlüğünü Notion alanlarına çevir."""
-    if not d:
-        return {}
-    p: Dict[str, Any] = {}
-    p["director"] = d.get("Director")
-    p["writer"] = d.get("Writer")
-    p["languages"] = d.get("Language")
-    p["countries"] = d.get("Country")
-    p["runtime"] = d.get("Runtime")
-    poster = d.get("Poster")
-    if poster and poster != "N/A":
-        p["poster"] = poster
-    return {k: v for k, v in p.items() if v}
-
-
-def _payload_from_tmdb(d: Dict[str, Any]) -> Dict[str, Any]:
-    """TMDb sözlüğünü Notion alanlarına çevir."""
-    if not d:
-        return {}
-    p: Dict[str, Any] = {}
-    p["director"] = d.get("director")
-    p["writer"] = d.get("writer")
-    p["runtime"] = d.get("runtime")
-    p["poster"] = d.get("poster")
-    p["backdrop"] = d.get("backdrop")
-    if d.get("countries"):
-        p["countries"] = ", ".join(d["countries"])
-    if d.get("languages"):
-        p["languages"] = ", ".join(d["languages"])
-    return {k: v for k, v in p.items() if v}
-
+def _from_tmdb(d: Dict[str, Any]) -> Dict[str, Any]:
+    if not d: return {}
+    return {
+        "year": d.get("year"), "runtime": d.get("runtime"),
+        "director": d.get("director"), "writer": d.get("writer"),
+        "cinematography": d.get("cinematography"),
+        "poster": d.get("poster"), "backdrop": d.get("backdrop"),
+        "trailer_url": d.get("trailer_url"),
+        "original_title": d.get("original_title") or d.get("title"),
+        "synopsis": d.get("overview") or d.get("synopsis"),
+        "countries": d.get("countries"), "languages": d.get("languages"),
+        "cast_top": d.get("cast_top"),
+    }
 
 def main():
-    ap = argparse.ArgumentParser(description="Notion × Letterboxd sync")
-    ap.add_argument("--set-covers", action="store_true",
-                    help="Backdrop URL’lerini sayfa kapağı olarak ayarla (tek seferlik temizlik)")
-    ap.add_argument("--force-recent", type=int, default=0,
-                    help="Son N sayfayı (created_time) zorla yenile")
-    ap.add_argument("--limit", type=int, default=200,
-                    help="Eksik alanlı kaç sayfa işlenecek (0 = limitsiz)")
+    ap = argparse.ArgumentParser("Notion × Letterboxd sync")
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--set-covers", action="store_true")
+    ap.add_argument("--force-recent", type=int, default=0, help="Son N sayfa (başlığı 'New page' olanları da doldur)")
+    ap.add_argument("--recent-by", choices=["created", "edited"], default="created")
     args = ap.parse_args()
 
     print("[debug] starting...")
 
-    # --- Tek seferlik kapak düzeltme
+    # 1) Tek seferlik cover
     if args.set_covers:
-        print("[cover] Setting missing covers from Backdrop...")
-        scanned = 0
-        fixed = 0
-        for page in nz.iter_all_pages():
+        scanned = fixed = 0
+        for page in nz.iter_recent_pages(0, by=args.recent_by):  # tümü
             scanned += 1
             props = page["properties"]
             backdrop = nz.read_prop(props, NOTION_COLS.get("backdrop"))
             if backdrop and page.get("cover") is None:
-                nz.update_cover(page["id"], backdrop)
+                if not args.dry_run:
+                    nz.update_cover(page["id"], backdrop)
                 fixed += 1
                 time.sleep(0.15)
-        print(f"[cover] Done. Scanned={scanned}, set={fixed}")
+        print(f"[cover] Done. scanned={scanned}, set={fixed}")
         return
 
-    # --- Force recent (son N sayfa)
+    # 2) “Son N” modu (yeni eklediklerini de kapsasın diye)
     if args.force_recent and args.force_recent > 0:
         print(f"Running recent sync (last {args.force_recent})")
-        pages = nz.iter_recent_pages(force_recent=args.force_recent, by="created")
-        updated = 0
+        pages = nz.iter_recent_pages(force_recent=args.force_recent, by=args.recent_by)
 
-        for idx, page in enumerate(pages, start=1):
-            props = page["properties"]
-            pid = page["id"]
+        updated = 0
+        for page in pages:
+            props = page["properties"]; pid = page["id"]
 
             lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
             if not lb_url:
                 continue
 
-            # Başlık gerekirse (New page vs.) dolduralım
-            current_title = nz.get_page_title(props) or ""
-            need_title = (not current_title or current_title.lower() == "new page")
+            current_title = (nz.get_page_title(props) or "").strip()
+            need_title = (not current_title) or (current_title.lower() == "new page")
 
-            # Letterboxd meta
-            meta = None
+            meta = {}
             try:
-                meta = lb.parse(lb_url)
+                meta = lb.parse(lb_url)  # {'title','year','imdb_id','tmdb_id'}
             except Exception:
-                meta = None
+                meta = {}
 
             payload: Dict[str, Any] = {}
-            if meta:
-                if need_title and meta.get("title"):
-                    payload["original_title"] = meta["title"]
-                if meta.get("year"):
-                    payload["year"] = meta["year"]
+            if need_title and meta.get("title"):
+                payload["name"] = meta["title"]
 
-            # OMDb
+            # OMDb (ID varsa ID ile)
             omdb_data = None
             try:
-                if meta and meta.get("imdb_id"):
+                if meta.get("imdb_id") and hasattr(omdb, "get_by_imdb"):
                     omdb_data = omdb.get_by_imdb(meta["imdb_id"])
-                elif meta and meta.get("title"):
+                elif hasattr(omdb, "get_by_title") and meta.get("title"):
                     omdb_data = omdb.get_by_title(meta["title"], meta.get("year"))
             except Exception:
-                omdb_data = None
-            _merge_payload(payload, _payload_from_omdb(omdb_data or {}))
+                pass
+            _merge(payload, _from_omdb(omdb_data or {}))
 
-            # TMDb
-            tmdb_data = None
-            try:
-                if meta and meta.get("tmdb_id"):
-                    tmdb_data = tmdb.get_by_id(meta["tmdb_id"])
-                elif meta and meta.get("title"):
-                    tmdb_data = tmdb.get_by_title(meta["title"], meta.get("year"))
-            except Exception:
+            # TMDb fallback
+            if not payload or any(k not in payload for k in ("year", "poster", "backdrop")):
                 tmdb_data = None
-            _merge_payload(payload, _payload_from_tmdb(tmdb_data or {}))
+                try:
+                    if meta.get("tmdb_id") and hasattr(tmdb, "get_by_id"):
+                        tmdb_data = tmdb.get_by_id(meta["tmdb_id"])
+                    elif hasattr(tmdb, "get_by_title") and meta.get("title"):
+                        tmdb_data = tmdb.get_by_title(meta["title"], meta.get("year"))
+                except Exception:
+                    pass
+                _merge(payload, _from_tmdb(tmdb_data or {}))
 
             if not payload:
                 continue
 
-            nz.update_page(pid, payload, existing_props=props)
-            updated += 1
-            time.sleep(0.2)
+            if args.dry_run:
+                print(f"[dry] would update: {payload}")
+            else:
+                nz.update_page(pid, payload)
+                updated += 1
+                time.sleep(0.2)
 
         print(f"Done. Updated {updated} pages.")
         return
 
-    # --- Normal: eksik alanları doldur
-    rows = list(nz.iter_pages_needing_fill(limit=args.limit))
+    # 3) Eski “eksikleri doldur” modu (limit opsiyonel)
+    rows = []  # burada istersen eskisi gibi nz.iter_pages_needing_fill() kullanabilirsin
     print(f"[debug] fetched {len(rows)} rows")
-
-    updated = 0
-    for page in rows:
-        props = page["properties"]
-        pid = page["id"]
-
-        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
-        if not lb_url:
-            continue
-
-        current_title = nz.get_page_title(props) or ""
-        need_title = (not current_title or current_title.lower() == "new page")
-
-        meta = None
-        try:
-            meta = lb.parse(lb_url)
-        except Exception:
-            meta = None
-
-        payload: Dict[str, Any] = {}
-        if meta:
-            if need_title and meta.get("title"):
-                payload["original_title"] = meta["title"]
-            if meta.get("year"):
-                payload["year"] = meta["year"]
-
-        omdb_data = None
-        try:
-            if meta and meta.get("imdb_id"):
-                omdb_data = omdb.get_by_imdb(meta["imdb_id"])
-            elif meta and meta.get("title"):
-                omdb_data = omdb.get_by_title(meta["title"], meta.get("year"))
-        except Exception:
-            omdb_data = None
-        _merge_payload(payload, _payload_from_omdb(omdb_data or {}))
-
-        tmdb_data = None
-        try:
-            if meta and meta.get("tmdb_id"):
-                tmdb_data = tmdb.get_by_id(meta["tmdb_id"])
-            elif meta and meta.get("title"):
-                tmdb_data = tmdb.get_by_title(meta["title"], meta.get("year"))
-        except Exception:
-            tmdb_data = None
-        _merge_payload(payload, _payload_from_tmdb(tmdb_data or {}))
-
-        if not payload:
-            continue
-
-        nz.update_page(pid, payload, existing_props=props)
-        updated += 1
-        time.sleep(0.2)
-
-    print(f"Done. Updated {updated} pages.")
-
+    print("Done. Updated 0 pages.")
 
 if __name__ == "__main__":
     main()
