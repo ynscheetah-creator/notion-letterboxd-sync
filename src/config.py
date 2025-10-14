@@ -21,6 +21,7 @@ NOTION_COLS = {
 
     "year":            "Year",              # number
     "runtime":         "Runtime (min)",     # number
+    "mubi":            "MUBI",              # multi-select
 
     "director":        "Director",          # multi-select
     "writer":          "Writer",            # multi-select
