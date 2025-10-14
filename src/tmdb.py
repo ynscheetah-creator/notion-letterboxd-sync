@@ -91,27 +91,103 @@ def fetch_by_title(title: str, year: Optional[int] = None) -> Dict[str, Any]:
     best = r[0]
     return fetch_movie(str(best.get("id")))
 
+def get_streaming_availability(tmdb_id: str) -> List[str]:
+    """
+    Film için streaming availability bilgilerini döndürür:
+    1. Türkiye'deki TÜM platformlar (Netflix, Amazon Prime, Disney+, HBO Max, TOD...)
+    2. MUBI için GLOBAL availability (MUBI-CA, MUBI-US, MUBI-TR...)
+    
+    Örnek dönüş: ["Netflix", "Amazon Prime Video", "MUBI-CA", "MUBI-US", "MUBI-TR", "Disney Plus"]
+    """
+    if not tmdb_id:
+        return []
+    
+    d = _get(f"{BASE}/movie/{tmdb_id}/watch/providers")
+    if not d:
+        return []
+    
+    results = d.get("results", {})
+    platforms: List[str] = []
+    
+    # 1. Türkiye'deki tüm platformları ekle
+    turkey_data = results.get("TR", {})
+    
+    # Subscription (Netflix, Prime, Disney+ vs.)
+    for provider in turkey_data.get("flatrate", []):
+        name = provider.get("provider_name", "")
+        if name and name != "MUBI":  # MUBI'yi ayrı handle edeceğiz
+            platforms.append(name)
+    
+    # Rental (Google Play, Apple TV vs.)
+    for provider in turkey_data.get("rent", []):
+        name = provider.get("provider_name", "")
+        if name and name not in platforms and name != "MUBI":
+            platforms.append(name)
+    
+    # Buy (satın alma)
+    for provider in turkey_data.get("buy", []):
+        name = provider.get("provider_name", "")
+        if name and name not in platforms and name != "MUBI":
+            platforms.append(name)
+    
+    # 2. MUBI için dünya çapında hangi ülkelerde var
+    mubi_countries: List[str] = []
+    for country_code, payload in results.items():
+        flatrate = payload.get("flatrate", [])
+        for provider in flatrate:
+            if provider.get("provider_name") == "MUBI":
+                mubi_countries.append(f"MUBI-{country_code}")
+                break
+    
+    # MUBI ülkelerini ekle
+    platforms.extend(sorted(mubi_countries))
+    
+    return sorted(platforms)
+
+
+# Backward compatibility - eski fonksiyonlar
 def get_providers_mubi(tmdb_id: str) -> List[str]:
-    """
-    TMDb watch/providers endpoint'inden MUBI availability kontrol eder.
-    MUBI'de varsa ["MUBI"] döndürür, yoksa boş liste döndürür.
-    """
+    """Deprecated: get_streaming_availability kullan"""
     if not tmdb_id:
         return []
     d = _get(f"{BASE}/movie/{tmdb_id}/watch/providers")
     if not d:
         return []
-    
     res = d.get("results", {})
-    
-    # Herhangi bir ülkede MUBI'de var mı kontrol et
-    for cc, payload in res.items():
+    mubi_countries: List[str] = []
+    for country_code, payload in res.items():
         flatrate = payload.get("flatrate") or []
         for provider in flatrate:
             if provider.get("provider_name") == "MUBI":
-                return ["MUBI"]  # Bulunca hemen döndür
-    
-    return []  # Hiçbir ülkede yok
+                mubi_countries.append(country_code)
+                break
+    return sorted(mubi_countries)
+
+
+def get_providers_turkey(tmdb_id: str) -> List[str]:
+    """Deprecated: get_streaming_availability kullan"""
+    if not tmdb_id:
+        return []
+    d = _get(f"{BASE}/movie/{tmdb_id}/watch/providers")
+    if not d:
+        return []
+    res = d.get("results", {})
+    turkey_data = res.get("TR", {})
+    platforms: List[str] = []
+    for provider in turkey_data.get("flatrate", []):
+        name = provider.get("provider_name", "")
+        if name and name not in platforms:
+            platforms.append(name)
+    for provider in turkey_data.get("rent", []):
+        name = provider.get("provider_name", "")
+        if name and name not in platforms:
+            platforms.append(name)
+    for provider in turkey_data.get("buy", []):
+        name = provider.get("provider_name", "")
+        if name and name not in platforms:
+            platforms.append(name)
+    return sorted(platforms)
+
 
 # Geriye uyumluluk için eski isimler
 get_by_id = fetch_movie
