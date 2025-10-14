@@ -32,3 +32,17 @@ def get_mubi_regions(tmdb_id: str | int) -> list[str]:
             if country_code.upper() in regions:
                 break
     return sorted(regions)
+def search_movie_id(title: str, year: int | None) -> str | None:
+    if not title:
+        return None
+    params = {"query": title, "include_adult": "false", "page": 1}
+    if year:
+        params["year"] = year
+    try:
+        data = _tmdb_get("/search/movie", params)
+    except requests.HTTPError:
+        return None
+    results = data.get("results", [])
+    if not results:
+        return None
+    return str(results[0].get("id")) if results[0].get("id") else None
