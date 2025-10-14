@@ -1,22 +1,28 @@
+# src/main.py
 from __future__ import annotations
 
 import argparse
 import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 from . import notion as nz
 from . import letterboxd as lb
 from . import omdb, tmdb
 from .config import NOTION_COLS
 
-# ------------ small utils
-def _merge(dst: Dict[str, Any], src: Optional[Dict[str, Any]]) -> None:
+
+# -----------------------------
+# Small helpers
+# -----------------------------
+def _merge_payload(dst: Dict[str, Any], src: Optional[Dict[str, Any]]) -> None:
+    """Copy only truthy / meaningful fields from src to dst."""
     if not src:
         return
     for k, v in src.items():
         if v in (None, "", [], {}):
             continue
         dst[k] = v
+
 
 def _payload_from_omdb(d: Dict[str, Any]) -> Dict[str, Any]:
     if not d:
@@ -29,93 +35,40 @@ def _payload_from_omdb(d: Dict[str, Any]) -> Dict[str, Any]:
         "cinematography": d.get("cinematography"),
         "poster": d.get("poster"),
         "original_title": d.get("original_title") or d.get("title"),
-        "synopsis": d.get("synopsis"),
+        "synopsis": d.get("plot") or d.get("synopsis"),
         "countries": d.get("countries"),
         "languages": d.get("languages"),
         "cast_top": d.get("cast_top"),
+        "backdrop": d.get("backdrop"),
+        "trailer_url": d.get("trailer_url"),
     }
+
 
 def _payload_from_tmdb(d: Dict[str, Any]) -> Dict[str, Any]:
     if not d:
         return {}
     return {
-        "year": (int(d["year"]) if d.get("year") else None),
+        "year": d.get("year"),
         "runtime": d.get("runtime"),
+        "director": d.get("director"),
+        "writer": d.get("writer"),
+        "cinematography": d.get("cinematography"),
         "poster": d.get("poster"),
         "original_title": d.get("original_title") or d.get("title"),
-        "synopsis": d.get("synopsis"),
+        "synopsis": d.get("overview") or d.get("synopsis"),
+        "countries": d.get("countries"),
+        "languages": d.get("languages"),
+        "cast_top": d.get("cast_top"),
         "backdrop": d.get("backdrop"),
+        "trailer_url": d.get("trailer_url"),
     }
 
-# ------------ main modes
-def mode_fill_missing(args):
-    rows = nz.iter_pages_needing_fill(limit=args.limit)
-    print(f"[debug] fetched {len(rows)} rows")
 
-    updated = 0
-    for idx, page in enumerate(rows, start=1):
-        props = page["properties"]
-        pid = page["id"]
-
-        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
-        if not lb_url:
-            continue
-
-        # title/year/ids
-        title_guess = None
-        year_guess = None
-        imdb_id = None
-        tmdb_id = None
-
-        try:
-            meta = lb.parse(lb_url)
-        except Exception:
-            meta = {}
-
-        if isinstance(meta, dict):
-            title_guess = meta.get("title")
-            year_guess = meta.get("year")
-            imdb_id = meta.get("imdb_id")
-            tmdb_id = meta.get("tmdb_id")
-
-        if not title_guess:
-            title_guess = nz.get_page_title(props)
-
-        print(f"[debug] row {idx}: title='{title_guess}' url='{lb_url}'")
-
-        payload: Dict[str, Any] = {}
-
-        # OMDb → TMDb merge
-        try:
-            if imdb_id and hasattr(omdb, "get_by_imdb"):
-                _merge(payload, _payload_from_omdb(omdb.get_by_imdb(imdb_id)))
-            elif title_guess:
-                _merge(payload, _payload_from_omdb(omdb.get_by_title(title_guess, year_guess)))
-        except Exception:
-            pass
-
-        try:
-            if tmdb_id:
-                _merge(payload, _payload_from_tmdb(tmdb.get_by_id(tmdb_id)))
-            elif title_guess:
-                _merge(payload, _payload_from_tmdb(tmdb.get_by_title(title_guess, year_guess)))
-        except Exception:
-            pass
-
-        if not payload:
-            print(f"[skip] {title_guess}: no data found")
-            continue
-
-        if args.dry_run:
-            print(f"[dry] Would update {title_guess}: {payload}")
-        else:
-            nz.update_page(pid, payload, existing_props=props)
-            updated += 1
-            time.sleep(0.2)
-
-    print(f"Done. Updated {updated} pages.")
-
-def mode_set_covers(args):
+# -----------------------------
+# Core runners
+# -----------------------------
+def mode_set_covers(dry_run: bool) -> None:
+    """One-shot: set page cover from Backdrop URL if cover is empty."""
     print("[cover] Setting missing covers from Backdrop...", flush=True)
     scanned = 0
     fixed = 0
@@ -125,162 +78,159 @@ def mode_set_covers(args):
         backdrop = nz.read_prop(props, NOTION_COLS.get("backdrop"))
         current_cover = page.get("cover")
         if backdrop and current_cover is None:
-            if not args.dry_run:
+            if not dry_run:
                 nz.update_cover(page["id"], backdrop)
             fixed += 1
             time.sleep(0.15)
     print(f"[cover] Done. Scanned={scanned}, set={fixed}")
 
-def mode_force_recent(args):
-    N = args.force_recent
-    by = "created"
-    pages = nz.iter_recent_pages(force_recent=N, by=by)
-    print(f"Running recent sync (last {N})")
 
-    for idx, page in enumerate(pages, start=1):
-        props = page["properties"]
-        pid = page["id"]
+def _enrich_one_page(page: Dict[str, Any], dry_run: bool) -> bool:
+    """
+    Enrich a single Notion page. Returns True if updated.
+    - If page title is empty or 'New page', try to set it from Letterboxd.
+    - Then fetch & fill other fields from OMDb/TMDb.
+    """
+    props = page["properties"]
+    pid = page["id"]
 
-        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
-        if not lb_url:
-            continue
+    # Letterboxd link
+    lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
+    if not lb_url:
+        return False
 
-        current_title = nz.get_page_title(props) or ""
-        need_title = (not current_title or current_title.lower() == "new page")
+    # Current title and need_title
+    current_title = nz.get_page_title(props) or ""
+    need_title = (not current_title) or (current_title.lower() == "new page")
 
-        title_guess = None
-        year_guess = None
-        imdb_id = None
-        tmdb_id = None
+    # Guess meta from Letterboxd
+    title_guess: Optional[str] = None
+    year_guess: Optional[int] = None
+    imdb_id: Optional[str] = None
+    tmdb_id: Optional[str] = None
 
+    meta = None
+    try:
+        meta = lb.parse(lb_url)  # {'title','year','imdb_id','tmdb_id'}
+    except Exception:
+        meta = None
+
+    if isinstance(meta, dict):
+        title_guess = meta.get("title") or title_guess
+        year_guess = meta.get("year") or year_guess
+        imdb_id = meta.get("imdb_id") or imdb_id
+        tmdb_id = meta.get("tmdb_id") or tmdb_id
+
+    # Build payload
+    payload: Dict[str, Any] = {}
+
+    # If title is missing/placeholder —> set from Letterboxd
+    if need_title and title_guess:
+        payload["title"] = title_guess
+
+    # 1) OMDb first (by id if possible, else by title/year)
+    omdb_data = None
+    try:
+        if imdb_id and hasattr(omdb, "get_by_imdb"):
+            omdb_data = omdb.get_by_imdb(imdb_id)
+        elif hasattr(omdb, "get_by_title") and (title_guess or current_title):
+            omdb_data = omdb.get_by_title(title_guess or current_title, year_guess)
+    except Exception:
+        omdb_data = None
+
+    if omdb_data:
+        _merge_payload(payload, _payload_from_omdb(omdb_data))
+
+    # 2) TMDb fallback / completion
+    need_core = any(
+        k not in payload
+        for k in ("year", "director", "writer", "cinematography", "runtime", "poster", "backdrop")
+    )
+    if need_core:
+        tmdb_data = None
         try:
-            meta = lb.parse(lb_url)
+            if tmdb_id and hasattr(tmdb, "get_by_id"):
+                tmdb_data = tmdb.get_by_id(tmdb_id)
+            elif hasattr(tmdb, "get_by_title") and (title_guess or current_title):
+                tmdb_data = tmdb.get_by_title(title_guess or current_title, year_guess)
         except Exception:
-            meta = {}
+            tmdb_data = None
+        if tmdb_data:
+            _merge_payload(payload, _payload_from_tmdb(tmdb_data))
 
-        if isinstance(meta, dict):
-            title_guess = meta.get("title") or (current_title if need_title else current_title)
-            year_guess = meta.get("year")
-            imdb_id = meta.get("imdb_id")
-            tmdb_id = meta.get("tmdb_id")
+    # nothing to write
+    if not payload:
+        return False
 
-        payload: Dict[str, Any] = {}
+    if dry_run:
+        print(f"[dry] Would update '{current_title or title_guess or 'Unknown'}': {payload}")
+        return False
 
-        try:
-            if imdb_id:
-                _merge(payload, _payload_from_omdb(omdb.get_by_imdb(imdb_id)))
-            elif title_guess:
-                _merge(payload, _payload_from_omdb(omdb.get_by_title(title_guess, year_guess)))
-        except Exception:
-            pass
+    nz.update_page(pid, payload, existing_props=props)
+    # Rate-limit safety
+    time.sleep(0.2)
+    return True
 
-        try:
-            if tmdb_id:
-                _merge(payload, _payload_from_tmdb(tmdb.get_by_id(tmdb_id)))
-            elif title_guess:
-                _merge(payload, _payload_from_tmdb(tmdb.get_by_title(title_guess, year_guess)))
-        except Exception:
-            pass
 
-        if not payload:
-            continue
-
-        if args.dry_run:
-            print(f"[dry] Would update recent {idx}: {payload}")
-        else:
-            nz.update_page(pid, payload, existing_props=props)
-            time.sleep(0.2)
-
-    print(f"Done. Updated {len(pages)} pages.")
-
-def mode_refresh_mubi(args):
-    if args.refresh_mubi not in ("all", "recent"):
-        print("Bad --refresh-mubi argument; use 'all' or 'recent'")
-        return
-
-    if args.refresh_mubi == "all":
-        pages_iter = nz.iter_all_pages()
-        print("Refreshing MUBI for ALL pages (daily run)")
-    else:
-        N = args.mubi_recent or 300
-        pages_iter = nz.iter_recent_pages(force_recent=N, by="edited")
-        print(f"Refreshing MUBI for RECENT pages (last {N})")
-
+def mode_fill_missing(limit: int, dry_run: bool) -> None:
+    rows = nz.iter_pages_needing_fill(limit=limit)
+    print(f"[debug] fetched {len(rows)} rows")
     updated = 0
-    for page in pages_iter:
-        props = page["properties"]
-        pid = page["id"]
-        lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
-        if not lb_url:
-            continue
+    for idx, page in enumerate(rows, start=1):
+        ok = _enrich_one_page(page, dry_run=dry_run)
+        updated += int(ok)
+    print(f"Done. Updated {updated} pages.")
 
-        # LB → TMDb id
-        tmdb_id = None
-        try:
-            meta = lb.parse(lb_url)
-            tmdb_id = meta.get("tmdb_id")
-        except Exception:
-            pass
 
-        if not tmdb_id:
-            # son çare: isim/yıl ara
-            title_guess = nz.get_page_title(props) or None
-            year_guess = nz.read_prop(props, NOTION_COLS.get("year"))
-            if title_guess:
-                try:
-                    maybe = tmdb.get_by_title(title_guess, year_guess)
-                    # get_by_title zaten geri get_by_id çağırıyor; tmdb_id tutmuyoruz ama provider için id gerekmez (bize yok)
-                    # provider için id lazım olduğundan bir daha ara:
-                    # basit çözüm: tekrar search yapıp first id
-                    # (performans yeterli)
-                    pass
-                except Exception:
-                    pass
+def mode_force_recent(n: int, dry_run: bool, sort_by: str = "edited") -> None:
+    """
+    Scan last N pages (by 'edited' or 'created') and enrich them regardless of NEED_KEYS.
+    Requires nz.iter_recent_pages(force_recent=N, by=sort_by).
+    """
+    print(f"Running recent sync (last {n})")
+    pages = nz.iter_recent_pages(force_recent=n, by=sort_by)
+    updated = 0
+    for page in pages:
+        ok = _enrich_one_page(page, dry_run=dry_run)
+        updated += int(ok)
+    print(f"Done. Updated {updated} pages.")
 
-        # provider regions
-        regions: List[str] = []
-        try:
-            if tmdb_id:
-                regions = tmdb.get_providers_mubi(tmdb_id)
-        except Exception:
-            regions = []
 
-        if args.dry_run:
-            print(f"[dry] Would set MUBI={regions} for page {pid}")
-        else:
-            nz.update_page(pid, {"mubi": regions}, existing_props=props)
-            updated += 1
-            time.sleep(0.2)
-
-    print(f"[mubi] updated {updated} page(s).")
-
-# ------------ CLI
+# -----------------------------
+# CLI
+# -----------------------------
 def main():
     ap = argparse.ArgumentParser("Notion × Letterboxd sync")
-    ap.add_argument("--limit", type=int, default=0, help="İşlenecek satır sayısı (fill-missing). 0=limitsiz")
-    ap.add_argument("--dry-run", action="store_true")
-
-    ap.add_argument("--set-covers", action="store_true", help="Backdrop URL’lerini cover olarak ayarla (tek seferlik)")
-    ap.add_argument("--force-recent", type=int, default=0, metavar="N", help="Son N sayfayı doldurmaya zorla")
-
-    # MUBI
-    ap.add_argument("--refresh-mubi", choices=["all", "recent"], help="MUBI mevcudiyetini yenile")
-    ap.add_argument("--mubi-recent", type=int, default=300, help="--refresh-mubi recent için N (default 300)")
-
+    ap.add_argument("--limit", type=int, default=0, help="Max rows to process in missing-fill mode (0=all)")
+    ap.add_argument("--dry-run", action="store_true", help="Log only; do not write to Notion")
+    ap.add_argument("--set-covers", action="store_true", help="One-shot: set page cover from Backdrop if empty")
+    ap.add_argument(
+        "--force-recent",
+        type=int,
+        default=0,
+        help="Process the most recently edited/created N pages (ignores NEED_KEYS)",
+    )
+    ap.add_argument(
+        "--recent-by",
+        choices=("edited", "created"),
+        default="edited",
+        help="When using --force-recent, sort by 'edited' or 'created' time",
+    )
     args = ap.parse_args()
 
     print("[debug] starting...")
 
     if args.set_covers:
-        return mode_set_covers(args)
-
-    if args.refresh_mubi:
-        return mode_refresh_mubi(args)
+        mode_set_covers(dry_run=args.dry_run)
+        return
 
     if args.force_recent and args.force_recent > 0:
-        return mode_force_recent(args)
+        mode_force_recent(n=args.force_recent, dry_run=args.dry_run, sort_by=args.recent_by)
+        return
 
-    return mode_fill_missing(args)
+    # default: fill only missing target fields
+    mode_fill_missing(limit=args.limit, dry_run=args.dry_run)
+
 
 if __name__ == "__main__":
     main()
