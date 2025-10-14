@@ -210,15 +210,15 @@ NEED_KEYS = (
 
 def iter_pages_needing_fill(limit: int = 200):
     """
-    Letterboxd linki olan ve hedef alanlarından en az biri boş olan sayfaları döndürür.
-    limit=0 -> limitsiz. Veritabanını sayfalayarak tarar.
+    Letterboxd linki olan, başlığı 'New page' ya da boş olan
+    veya hedef alanlarından biri eksik olan sayfaları döndürür.
     """
     page_size = 100
     start_cursor = None
-    results: List[Dict[str, Any]] = []
+    results = []
 
     while True:
-        payload: Dict[str, Any] = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        payload = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
         if start_cursor:
             payload["start_cursor"] = start_cursor
 
@@ -229,57 +229,71 @@ def iter_pages_needing_fill(limit: int = 200):
 
         for page in pages:
             props = page["properties"]
-
             lb = read_prop(props, NOTION_COLS.get("letterboxd"))
             if not lb:
                 continue
 
-            need_any = False
+            # Başlık boşsa veya "New page" ise işlem listesine al
+            current_title = get_page_title(props)
+            if not current_title or current_title.lower().startswith("new page"):
+                results.append(page)
+                if limit and len(results) >= limit:
+                    return results
+                continue
+
+            # Alanlardan biri eksikse yine al
             for k in NEED_KEYS:
                 col = NOTION_COLS.get(k)
                 if not col or col not in props:
                     continue
                 v = read_prop(props, col)
-                if k in ("year", "runtime"):
-                    if v is None:
-                        need_any = True
-                        break
-                else:
-                    if v in (None, "", []):
-                        need_any = True
-                        break
+                if v in (None, "", []):
+                    results.append(page)
+                    break
 
-            if need_any:
-                results.append(page)
-                if limit and len(results) >= limit:
-                    return results
+            if limit and len(results) >= limit:
+                return results
 
         if not has_more:
             break
 
     return results
 
+
 def iter_recent_pages(force_recent: int = 200):
     """
-    Veritabanından son `force_recent` sayfayı getirir (oluşturulma/son güncelleme sırası).
-    Başlıkları “New page” olan taze satırları yakalamak için kullanılır.
+    Son oluşturulan ya da güncellenen sayfaları getirir.
+    Bu sürüm, sadece link girilmiş ve henüz başlığı boş olan
+    'New page' satırlarını da dahil eder.
     """
     page_size = min(100, force_recent if force_recent > 0 else 100)
+    collected = []
     start_cursor = None
-    collected: List[Dict[str, Any]] = []
 
     while True:
-        payload: Dict[str, Any] = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
+        payload = {"database_id": NOTION_DATABASE_ID, "page_size": page_size}
         if start_cursor:
             payload["start_cursor"] = start_cursor
+
         resp = client.databases.query(**payload)
         pages = resp.get("results", [])
-        collected.extend(pages)
-        if len(collected) >= force_recent:
-            return collected[:force_recent]
+        for page in pages:
+            props = page["properties"]
+            lb = read_prop(props, NOTION_COLS.get("letterboxd"))
+            current_title = get_page_title(props)
+            if lb and (not current_title or current_title.lower().startswith("new page")):
+                collected.append(page)
+            elif lb:
+                collected.append(page)
+
+            if len(collected) >= force_recent:
+                return collected[:force_recent]
+
         if not resp.get("has_more"):
-            return collected
+            break
         start_cursor = resp.get("next_cursor")
+
+    return collected
 
 def iter_all_pages():
     """TÜM sayfaları döndürür (sayfalama ile)."""
