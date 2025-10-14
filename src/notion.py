@@ -19,6 +19,10 @@ def _txt(val: Optional[str]) -> Dict[str, Any]:
     s = str(val)
     return {"rich_text": [{"type": "text", "text": {"content": s}}]}
 
+def _rich(val: Optional[str]) -> Dict[str, Any]:
+    """Alias for _txt - rich text property"""
+    return _txt(val)
+
 def _num(val: Optional[Any]) -> Dict[str, Any]:
     if val in (None, ""):
         return {"number": None}
@@ -92,7 +96,32 @@ def get_page_title(props: dict) -> str | None:
     return None
 
 # ---------- iterators ----------
-# src/notion.py
+def iter_pages_needing_fill(limit: int = 0):
+    """
+    Letterboxd URL'i olan ama diğer alanları boş olan sayfaları getirir.
+    """
+    count = 0
+    for page in iter_all_pages():
+        props = page["properties"]
+        
+        # Letterboxd URL'i olmalı
+        lb_url = read_prop(props, NOTION_COLS.get("letterboxd"))
+        if not lb_url:
+            continue
+        
+        # En az bir alan boş olmalı (doldurulacak bir şey olmalı)
+        needs_fill = False
+        for key in ["year", "director", "writer", "runtime", "poster"]:
+            col = NOTION_COLS.get(key)
+            if col and not read_prop(props, col):
+                needs_fill = True
+                break
+        
+        if needs_fill:
+            yield page
+            count += 1
+            if limit > 0 and count >= limit:
+                break
 
 def iter_recent_pages(force_recent: int = 20, by: str = "created"):
     """
@@ -115,7 +144,6 @@ def iter_recent_pages(force_recent: int = 20, by: str = "created"):
             "page_size": page_size,
             "sorts": [
                 {
-                    # ÖNEMLİ: property değil, timestamp!
                     "timestamp": ts,
                     "direction": "descending",
                 }
@@ -158,44 +186,30 @@ def update_cover(page_id: str, url: Optional[str]) -> None:
         return
     client.pages.update(page_id=page_id, cover={"type": "external", "external": {"url": url}})
 
-def update_page(page_id: str, data: Dict[str, Any], existing_props: Dict[str, Any] | None = None) -> None:
-    """Python dict -> Notion properties (+ optional cover)."""
-    props: Dict[str, Any] = {}
-
-    # Name (title)
-    if "name" in data and NOTION_COLS.get("name"):
-        props[NOTION_COLS["name"]] = _title(data["name"])
-
-    # Numbers
-    if "year" in data and NOTION_COLS.get("year"):
-        props[NOTION_COLS["year"]] = _num(data["year"])
-    if "runtime" in data and NOTION_COLS.get("runtime"):
-        props[NOTION_COLS["runtime"]] = _num(data["runtime"])
-
-    # Rich text
-    for k in ("original_title", "synopsis"):
-        if k in data and NOTION_COLS.get(k):
-            props[NOTION_COLS[k]] = _txt(data[k])
-
-    # URLs
-    for k in ("poster", "backdrop", "trailer_url", "letterboxd"):
-        if k in data and NOTION_COLS.get(k):
-            props[NOTION_COLS[k]] = _url(data[k])
-
-    # Multi-select (limit 100 güvenlik için)
-    for k in ("director", "writer", "cinematography", "cast_top", "countries", "languages", "mubi"):
-        if k in data and NOTION_COLS.get(k):
-            props[NOTION_COLS[k]] = _multi(_as_list(data[k]), limit=100)
-
-    # Cover
+def update_page(page_id: str, properties: Dict[str, Any], existing_props: Dict[str, Any] | None = None) -> None:
+    """
+    Notion sayfasını günceller.
+    properties: Zaten Notion formatında hazırlanmış properties dict'i
+    """
+    if not properties:
+        return
+    
+    # Cover'ı ayrı handle et
     cover_payload = None
-    if data.get("backdrop"):
-        cover_payload = {"type": "external", "external": {"url": data["backdrop"]}}
-
+    backdrop_col = NOTION_COLS.get("backdrop")
+    if backdrop_col and backdrop_col in properties:
+        backdrop_data = properties[backdrop_col]
+        if backdrop_data.get("url"):
+            cover_payload = {"type": "external", "external": {"url": backdrop_data["url"]}}
+    
     kwargs: Dict[str, Any] = {"page_id": page_id}
-    if props:
-        kwargs["properties"] = props
+    if properties:
+        kwargs["properties"] = properties
     if cover_payload:
         kwargs["cover"] = cover_payload
+    
     if len(kwargs) > 1:
-        client.pages.update(**kwargs)
+        try:
+            client.pages.update(**kwargs)
+        except Exception as e:
+            print(f"[error] Failed to update page {page_id}: {e}")
