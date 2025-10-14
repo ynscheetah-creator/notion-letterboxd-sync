@@ -1,3 +1,4 @@
+# src/main.py
 from __future__ import annotations
 
 import argparse
@@ -10,7 +11,11 @@ from . import omdb, tmdb
 from .config import NOTION_COLS
 
 
+# ------------------------
+# küçük yardımcılar
+# ------------------------
 def _merge_payload(dst: Dict[str, Any], src: Optional[Dict[str, Any]]) -> None:
+    """src'de dolu gelen alanları dst'ye ekler (boşları yazmaz)."""
     if not src:
         return
     for k, v in src.items():
@@ -18,7 +23,9 @@ def _merge_payload(dst: Dict[str, Any], src: Optional[Dict[str, Any]]) -> None:
             continue
         dst[k] = v
 
+
 def _payload_from_omdb(d: Dict[str, Any]) -> Dict[str, Any]:
+    """OMDb sözlüğünü Notion alanlarına çevir."""
     if not d:
         return {}
     return {
@@ -37,7 +44,9 @@ def _payload_from_omdb(d: Dict[str, Any]) -> Dict[str, Any]:
         "trailer_url": d.get("trailer_url"),
     }
 
+
 def _payload_from_tmdb(d: Dict[str, Any]) -> Dict[str, Any]:
+    """TMDb sözlüğünü Notion alanlarına çevir."""
     if not d:
         return {}
     return {
@@ -56,27 +65,40 @@ def _payload_from_tmdb(d: Dict[str, Any]) -> Dict[str, Any]:
         "trailer_url": d.get("trailer_url"),
     }
 
+
+# ------------------------
+# ana akış
+# ------------------------
 def main():
     ap = argparse.ArgumentParser("Notion × Letterboxd sync")
     ap.add_argument("--limit", type=int, default=0, help="İşlenecek satır sayısı (0=limitsiz)")
     ap.add_argument("--dry-run", action="store_true", help="Notion'a yazmadan sadece logla")
-    ap.add_argument("--set-covers", action="store_true",
-                    help="Tüm sayfalarda Backdrop URL'sini cover olarak ayarla (tek seferlik)")
-    ap.add_argument("--force-recent", type=int, default=0,
-                    help="Son N sayfayı zorla tara (Name boş + sadece link olanları yakalamak için)")
+    ap.add_argument(
+        "--set-covers",
+        action="store_true",
+        help="Tüm sayfalarda Backdrop URL'sini sayfa cover'ı olarak ayarla (tek seferlik)",
+    )
+    ap.add_argument(
+        "--force-recent",
+        type=int,
+        default=0,
+        help="Son N kaydı zorla tara (sadece link olan yeni satırlar da dahil).",
+    )
     args = ap.parse_args()
 
     print("[debug] starting...")
 
-    # --- tek seferlik kapak düzeltme
+    # --- Tek seferlik kapak düzeltme modu ---
     if args.set_covers:
         print("[cover] Setting missing covers from Backdrop...", flush=True)
-        scanned = fixed = 0
+        scanned = 0
+        fixed = 0
         for page in nz.iter_all_pages():
             scanned += 1
             props = page["properties"]
             backdrop = nz.read_prop(props, NOTION_COLS.get("backdrop"))
-            if backdrop and page.get("cover") is None:
+            current_cover = page.get("cover")
+            if backdrop and current_cover is None:
                 if not args.dry_run:
                     nz.update_cover(page["id"], backdrop)
                 fixed += 1
@@ -84,52 +106,52 @@ def main():
         print(f"[cover] Done. Scanned={scanned}, set={fixed}")
         return
 
-    # --- normal mod (eksik alanları bul)
-    if args.force-recent and args.force_recent > 0:
-        rows = list(nz.iter_recent_pages(args.force_recent))
+    # --- Hangi satırlar? ---
+    if args.force_recent and args.force_recent > 0:
+        rows = nz.iter_recent_pages(recent_count=args.force_recent, limit=args.limit or 0)
+        print(f"[debug] fetched {len(rows)} recent rows")
     else:
         rows = nz.iter_pages_needing_fill(limit=args.limit)
-
-    print(f"[debug] fetched {len(rows)} rows" if isinstance(rows, list) else "[debug] fetched rows")
+        print(f"[debug] fetched {len(rows)} rows")
 
     updated = 0
     for idx, page in enumerate(rows, start=1):
         props = page["properties"]
         pid = page["id"]
 
+        # Letterboxd link
         lb_url = nz.read_prop(props, NOTION_COLS.get("letterboxd"))
         if not lb_url:
             continue
 
-        # Başlığı mevcut title property’den dene
-        title_guess = nz.get_page_title(props)
+        # Tahmini başlık & yıl & id'ler
+        title_guess = None
         year_guess = None
         imdb_id = None
         tmdb_id = None
 
-        # Letterboxd parse (link varsa her durumda deneriz; başlık yoksa yazacağız)
+        meta = None
         try:
             meta = lb.parse(lb_url)  # {'title','year','imdb_id','tmdb_id'}
         except Exception:
             meta = None
 
         if isinstance(meta, dict):
-            if not title_guess and meta.get("title"):
-                title_guess = meta.get("title")
-            if meta.get("year"):
-                year_guess = meta.get("year")
+            title_guess = meta.get("title")
+            year_guess = meta.get("year")
             imdb_id = meta.get("imdb_id")
             tmdb_id = meta.get("tmdb_id")
 
+        # fallback: Notion'daki Name
+        if not title_guess:
+            title_guess = nz.get_page_title(props) or nz.read_prop(props, NOTION_COLS.get("name"))
+
         print(f"[debug] row {idx}: title='{title_guess}' url='{lb_url}'")
 
+        # Kaynaklardan veri çek
         payload: Dict[str, Any] = {}
 
-        # Başlık boşsa Letterboxd’dan geleni Notion title’a yazmak için
-        if title_guess:
-            payload["name"] = title_guess
-
-        # 1) OMDb
+        # 1) OMDb (ID varsa önce onunla)
         omdb_data = None
         try:
             if imdb_id and hasattr(omdb, "get_by_imdb"):
@@ -138,14 +160,12 @@ def main():
                 omdb_data = omdb.get_by_title(title_guess, year_guess)
         except Exception:
             omdb_data = None
-
         if omdb_data:
             _merge_payload(payload, _payload_from_omdb(omdb_data))
 
-        # 2) TMDb fallback
-        if not payload or any(k not in payload for k in (
-            "year", "director", "writer", "cinematography", "runtime", "poster", "backdrop"
-        )):
+        # 2) TMDb fallback (ID varsa önce onunla)
+        need_core = any(k not in payload for k in ("year", "director", "writer", "cinematography", "runtime", "poster", "backdrop"))
+        if need_core:
             tmdb_data = None
             try:
                 if tmdb_id and hasattr(tmdb, "get_by_id"):
@@ -154,22 +174,25 @@ def main():
                     tmdb_data = tmdb.get_by_title(title_guess, year_guess)
             except Exception:
                 tmdb_data = None
-
             if tmdb_data:
                 _merge_payload(payload, _payload_from_tmdb(tmdb_data))
 
+        # hiçbir şey bulunamadıysa geç
         if not payload:
-            print(f"[skip] {title_guess or '(no title)'}: no data found")
+            print(f"[skip] {title_guess or '(unknown)'}: no data found")
             continue
 
+        # Notion update
         if args.dry_run:
-            print(f"[dry] Would update {title_guess or pid}: {payload}")
+            print(f"[dry] Would update {title_guess or '(unknown)'}: {payload}")
         else:
             nz.update_page(pid, payload, existing_props=props)
             updated += 1
+            # Notion rate-limit (güvenli)
             time.sleep(0.2)
 
     print(f"Done. Updated {updated} pages.")
+
 
 if __name__ == "__main__":
     main()
