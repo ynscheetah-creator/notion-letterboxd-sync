@@ -2,29 +2,39 @@ name: Fill missing fields
 
 on:
   schedule:
-    - cron: "0 5 * * *"    # 08:00 TRT
+    - cron: "0 5 * * *"    # 08:00 TRT (günde 2 kez)
     - cron: "0 20 * * *"   # 23:00 TRT
   workflow_dispatch:
     inputs:
       force_recent:
-        description: "Son N sayfayı zorla (boş bırak=devre dışı)"
+        description: "Son N sayfayı zorla (boş bırak=normal mod)"
         required: false
         default: ""
+        type: string
       set_covers:
         description: "Backdrop URL'lerini cover olarak ayarla (tek seferlik)"
         required: false
-        default: "false"
+        default: false
+        type: boolean
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install deps
-        run: pip install -r requirements.txt
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
       - name: Run sync
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
@@ -33,12 +43,23 @@ jobs:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
           set -euo pipefail
+          
           FORCE_RECENT="${{ github.event.inputs.force_recent }}"
           SET_COVERS="${{ github.event.inputs.set_covers }}"
+          
+          echo "Starting sync job..."
+          echo "Force recent: ${FORCE_RECENT:-none}"
+          echo "Set covers: ${SET_COVERS:-false}"
+          
           if [ "${SET_COVERS}" = "true" ]; then
+            echo "Running: Set covers mode"
             python -m src.main --set-covers
           elif [ -n "${FORCE_RECENT}" ]; then
+            echo "Running: Force recent mode (${FORCE_RECENT} pages)"
             python -m src.main --force-recent "${FORCE_RECENT}"
           else
+            echo "Running: Normal mode"
             python -m src.main
           fi
+          
+          echo "Sync completed successfully!"
