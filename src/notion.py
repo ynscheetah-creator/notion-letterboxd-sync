@@ -60,7 +60,23 @@ def get_page_title(props: dict) -> str | None:
 def update_cover(page_id: str, url: Optional[str]) -> None:
     if not url: return
     client.pages.update(page_id=page_id, cover={"type":"external","external":{"url":url}})
-
+# --- Yardımcı: Multi-select listelerini güvenli biçimde oluştur ---
+def _multi(items: list[str], limit: int = 100) -> dict:
+    """
+    Notion multi_select alanına güvenli biçimde liste verir.
+    Maksimum 100 etiketi aşmaz, tekrarlardan kaçınır.
+    """
+    uniq = []
+    seen = set()
+    for it in items:
+        name = str(it).strip()
+        if not name or name in seen:
+            continue
+        uniq.append({"name": name})
+        seen.add(name)
+        if len(uniq) >= limit:
+            break
+    return {"multi_select": uniq}
 def update_page(page_id: str, data: Dict[str, Any]) -> None:
     props: Dict[str, Any] = {}
 
