@@ -62,6 +62,9 @@ def fetch_movie(tmdb_id: str) -> Dict[str, Any]:
     countries = [c.get("name", "") for c in d.get("production_countries", [])]
     
     out: Dict[str, Any] = {}
+    out["id"] = d.get("id")  # TMDb ID - trailer ve streaming için lazım
+    out["imdb_id"] = d.get("imdb_id")  # IMDb ID - OMDb için lazım
+    out["title"] = d.get("title")
     out["year"] = int(d.get("release_date", "")[:4]) if d.get("release_date") else None
     out["runtime"] = d.get("runtime")
     out["original_title"] = d.get("original_title")
