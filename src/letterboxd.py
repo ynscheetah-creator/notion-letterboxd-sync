@@ -42,7 +42,8 @@ def parse(url: str) -> Dict[str, Any]:
             "title": str | None,
             "year": int | None,
             "imdb_id": str | None,
-            "tmdb_id": str | None
+            "tmdb_id": str | None,
+            "resolved_url": str | None  # Çözülmüş tam URL
         }
     """
     result = {
@@ -50,10 +51,12 @@ def parse(url: str) -> Dict[str, Any]:
         "year": None,
         "imdb_id": None,
         "tmdb_id": None,
+        "resolved_url": None,
     }
     
     try:
         resolved_url = _resolve_url(url)
+        result["resolved_url"] = resolved_url
         print(f"[letterboxd] Fetching: {resolved_url}")
         
         response = _scraper.get(resolved_url, timeout=TIMEOUT)
@@ -72,6 +75,9 @@ def parse(url: str) -> Dict[str, Any]:
         
     except Exception as e:
         print(f"[letterboxd] HTTP error: {e}")
+        # 403 olsa bile resolved_url'i döndürmeye çalış
+        if not result.get("resolved_url"):
+            result["resolved_url"] = _resolve_url_safe(url)
     
     return result
 
@@ -90,6 +96,23 @@ def _resolve_url(url: str) -> str:
             print(f"[letterboxd] Failed to resolve short URL: {e}")
     
     return url
+
+
+def _resolve_url_safe(url: str) -> Optional[str]:
+    """Sadece redirect'i çöz, hata olursa None dön"""
+    url = url.strip()
+    
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    
+    if "boxd.it/" in url:
+        try:
+            response = _scraper.head(url, allow_redirects=True, timeout=10)
+            return response.url
+        except:
+            pass
+    
+    return url if "letterboxd.com" in url else None
 
 
 def _extract_jsonld(soup: BeautifulSoup) -> Optional[Dict[str, Any]]:
@@ -142,6 +165,7 @@ def _parse_jsonld(jsonld: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, A
             if match:
                 result["tmdb_id"] = match.group(1)
     
+    # resolved_url'i koru
     return result
 
 
