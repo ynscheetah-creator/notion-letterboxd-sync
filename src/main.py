@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from typing import Any, Dict, List, Optional
 
 from .config import NOTION_COLS
@@ -40,22 +41,21 @@ def _need(props: Dict[str, Any], key: str) -> bool:
     return not nz.read_prop(props, col_name)
 
 
-def _extract_title_from_letterboxd_url(lb_url: str) -> Optional[str]:
+def _extract_title_from_letterboxd_url(url: str) -> Optional[str]:
     """
-    Letterboxd URL'inden film adını çıkarmaya çalış.
-    Örnek: https://letterboxd.com/film/little-forest/ -> "little forest"
+    Letterboxd URL'inden film adını çıkar.
+    Örnek: https://letterboxd.com/film/little-forest/ -> "Little Forest"
     """
-    if not lb_url:
+    if not url:
         return None
     
-    # URL'den slug'ı çıkar
-    import re
-    match = re.search(r'letterboxd\.com/film/([^/]+)', lb_url)
+    # letterboxd.com/film/xxx pattern'i ara
+    match = re.search(r'letterboxd\.com/film/([^/]+)', url)
     if match:
         slug = match.group(1)
         # Slug'ı başlığa çevir: "little-forest" -> "Little Forest"
         title = slug.replace('-', ' ').title()
-        # Yıl varsa kaldır (örn: "drifting-2021" -> "Drifting")
+        # Sondaki yılı kaldır (örn: "drifting-2021" -> "Drifting")
         title = re.sub(r'\s+\d{4}$', '', title)
         return title
     
@@ -78,11 +78,12 @@ def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]
     except Exception as e:
         print(f"[warn] lb.parse failed: {e}")
 
-    # 2. Letterboxd başarısız olduysa, alternatif kaynaklardan dene
+    # 2. Veri kaynaklarını belirle
     tmdb_id = meta.get("tmdb_id")
     imdb_id = meta.get("imdb_id")
     title_from_meta = meta.get("title")
     year_from_meta = meta.get("year")
+    resolved_url = meta.get("resolved_url")  # boxd.it -> letterboxd.com/film/xxx
     
     tmd = {}
     omd = {}
@@ -104,13 +105,17 @@ def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]
         if title_from_meta:
             search_title = title_from_meta
         
-        # Öncelik 2: Notion'daki sayfa adı
+        # Öncelik 2: Notion'daki sayfa adı (eğer gerçek bir isimse)
         if not search_title:
             page_title = nz.get_page_title(props)
             if page_title and page_title.lower() not in ["new page", "untitled", ""]:
                 search_title = page_title
         
-        # Öncelik 3: Letterboxd URL'inden çıkar
+        # Öncelik 3: Resolved Letterboxd URL'inden çıkar
+        if not search_title and resolved_url:
+            search_title = _extract_title_from_letterboxd_url(resolved_url)
+        
+        # Öncelik 4: Orijinal URL'den çıkar (boxd.it değilse)
         if not search_title:
             search_title = _extract_title_from_letterboxd_url(lb_url)
         
@@ -140,7 +145,7 @@ def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]
     # Title (sayfa adı)
     if _need(props, "name"):
         current_title = nz.get_page_title(props) or ""
-        if (not current_title) or current_title.lower() == "new page":
+        if (not current_title) or current_title.lower() in ["new page", "untitled"]:
             title = title_from_meta or tmd.get("title") or omd.get("Title")
             if title:
                 payload[NOTION_COLS["name"]] = nz._title(title)
@@ -290,10 +295,14 @@ def mode_refresh_mubi(args) -> int:
             # TMDb ID'yi bul
             meta = lb.parse(lb_url) or {}
             tmdb_id = meta.get("tmdb_id")
+            resolved_url = meta.get("resolved_url")
             
             # Letterboxd başarısızsa title ile ara
             if not tmdb_id:
-                search_title = meta.get("title") or nz.get_page_title(props) or _extract_title_from_letterboxd_url(lb_url)
+                search_title = meta.get("title") or nz.get_page_title(props)
+                if not search_title or search_title.lower() in ["new page", "untitled"]:
+                    search_title = _extract_title_from_letterboxd_url(resolved_url or lb_url)
+                
                 if search_title:
                     tmd = tmdb.fetch_by_title(search_title) or {}
                     tmdb_id = tmd.get("id")
