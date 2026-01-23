@@ -1,25 +1,66 @@
 """
 Letterboxd film sayfalarından metadata çıkarır.
 IMDb ID, TMDb ID, başlık ve yıl bilgisi için multiple fallback stratejisi kullanır.
+
+Cloudflare bypass için cloudscraper kullanır.
 """
 from __future__ import annotations
 import json
 import re
-import requests
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
+
+try:
+    import cloudscraper
+    HAS_CLOUDSCRAPER = True
+except ImportError:
+    import requests
+    HAS_CLOUDSCRAPER = False
+    print("[letterboxd] WARNING: cloudscraper not installed, using requests (may get 403)")
+
 from bs4 import BeautifulSoup
 
 # HTTP ayarları
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
-TIMEOUT = 15
+TIMEOUT = 20
 
 # Regex pattern'leri
 IMDB_PATTERN = re.compile(r"(?:imdb\.com/title/|imdb\.to/)(tt\d{7,10})", re.IGNORECASE)
 TMDB_PATTERN = re.compile(r"themoviedb\.org/movie/(\d+)", re.IGNORECASE)
 YEAR_PATTERN = re.compile(r"\b(19\d{2}|20\d{2})\b")
+
+# Global scraper instance (reuse for session cookies)
+_scraper = None
+
+
+def _get_scraper():
+    """Cloudscraper instance döndürür (singleton pattern)."""
+    global _scraper
+    if _scraper is None:
+        if HAS_CLOUDSCRAPER:
+            _scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'windows',
+                    'desktop': True
+                },
+                delay=5  # Cloudflare challenge için bekle
+            )
+        else:
+            import requests
+            _scraper = requests.Session()
+            _scraper.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate, br",
+                "DNT": "1",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+            })
+    return _scraper
 
 
 def parse(url: str) -> Dict[str, Any]:
@@ -44,17 +85,15 @@ def parse(url: str) -> Dict[str, Any]:
         "tmdb_id": None,
     }
     
+    scraper = _get_scraper()
+    
     try:
         # 1. URL'i normalize et ve çöz
-        resolved_url = _resolve_url(url)
+        resolved_url = _resolve_url(url, scraper)
         print(f"[letterboxd] Fetching: {resolved_url}")
         
         # 2. Sayfayı indir
-        response = requests.get(
-            resolved_url,
-            headers={"User-Agent": USER_AGENT},
-            timeout=TIMEOUT,
-        )
+        response = scraper.get(resolved_url, timeout=TIMEOUT)
         response.raise_for_status()
         html = response.text
         soup = BeautifulSoup(html, "html.parser")
@@ -73,20 +112,23 @@ def parse(url: str) -> Dict[str, Any]:
         # 6. Sonuçları logla
         _log_result(result)
         
-    except requests.RequestException as e:
-        print(f"[letterboxd] HTTP error: {e}")
     except Exception as e:
-        print(f"[letterboxd] Parse error: {e}")
+        error_msg = str(e)
+        if "403" in error_msg:
+            print(f"[letterboxd] HTTP error: 403 Forbidden - Cloudflare block. Try installing cloudscraper: pip install cloudscraper")
+        else:
+            print(f"[letterboxd] Error: {e}")
     
     return result
 
 
-def _resolve_url(url: str) -> str:
+def _resolve_url(url: str, scraper) -> str:
     """
     boxd.it kısa linklerini tam URL'e çevirir.
     
     Args:
         url: Ham URL (boxd.it/xxx veya letterboxd.com/film/xxx)
+        scraper: HTTP client instance
     
     Returns:
         str: Çözülmüş tam URL
@@ -103,12 +145,7 @@ def _resolve_url(url: str) -> str:
     # boxd.it kısa linklerini takip et
     if "boxd.it/" in url:
         try:
-            response = requests.get(
-                url,
-                headers={"User-Agent": USER_AGENT},
-                allow_redirects=True,
-                timeout=TIMEOUT,
-            )
+            response = scraper.get(url, allow_redirects=True, timeout=TIMEOUT)
             return response.url
         except Exception as e:
             print(f"[letterboxd] Failed to resolve short URL: {e}")
