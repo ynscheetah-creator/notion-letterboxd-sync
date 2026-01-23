@@ -142,8 +142,18 @@ def get_streaming_availability(tmdb_id: str) -> List[str]:
                 mubi_countries.append(f"MUBI-{country_code}")
                 break
     
-    # MUBI ülkelerini ekle
-    platforms.extend(sorted(mubi_countries))
+    # MUBI için: Eğer TR'de varsa "MUBI-TR", değilse sadece kaç ülkede var göster
+    if mubi_countries:
+        if "MUBI-TR" in mubi_countries:
+            platforms.append("MUBI-TR")
+        # Toplam kaç ülkede var bilgisi (çok fazla ülke olursa Notion 100 limit aşılıyor)
+        if len(mubi_countries) > 20:
+            platforms.append(f"MUBI ({len(mubi_countries)} countries)")
+        else:
+            # Az sayıda ülkeyse hepsini ekle
+            for mc in sorted(mubi_countries):
+                if mc != "MUBI-TR" and mc not in platforms:
+                    platforms.append(mc)
     
     return sorted(platforms)
 
