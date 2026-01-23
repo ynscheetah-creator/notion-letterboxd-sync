@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .config import NOTION_COLS
 from . import notion as nz
@@ -40,6 +40,28 @@ def _need(props: Dict[str, Any], key: str) -> bool:
     return not nz.read_prop(props, col_name)
 
 
+def _extract_title_from_letterboxd_url(lb_url: str) -> Optional[str]:
+    """
+    Letterboxd URL'inden film adını çıkarmaya çalış.
+    Örnek: https://letterboxd.com/film/little-forest/ -> "little forest"
+    """
+    if not lb_url:
+        return None
+    
+    # URL'den slug'ı çıkar
+    import re
+    match = re.search(r'letterboxd\.com/film/([^/]+)', lb_url)
+    if match:
+        slug = match.group(1)
+        # Slug'ı başlığa çevir: "little-forest" -> "Little Forest"
+        title = slug.replace('-', ' ').title()
+        # Yıl varsa kaldır (örn: "drifting-2021" -> "Drifting")
+        title = re.sub(r'\s+\d{4}$', '', title)
+        return title
+    
+    return None
+
+
 def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]:
     """
     Bir Notion sayfasındaki eksikleri tamamlamak için 
@@ -49,44 +71,84 @@ def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]
 
     print(f"[info] Processing: {lb_url}")
 
-    # Letterboxd'den meta getir
+    # 1. Letterboxd'dan meta getir
     meta = {}
     try:
         meta = lb.parse(lb_url) or {}
-        print(f"[debug] Letterboxd meta: title={meta.get('title')}, year={meta.get('year')}, imdb={meta.get('imdb_id')}")
     except Exception as e:
-        print(f"[warn] lb.parse failed for {lb_url}: {e}")
-        return payload
+        print(f"[warn] lb.parse failed: {e}")
 
-    # TMDb verileri
+    # 2. Letterboxd başarısız olduysa, alternatif kaynaklardan dene
+    tmdb_id = meta.get("tmdb_id")
+    imdb_id = meta.get("imdb_id")
+    title_from_meta = meta.get("title")
+    year_from_meta = meta.get("year")
+    
     tmd = {}
-    if meta.get("tmdb_id"):
+    omd = {}
+    
+    if tmdb_id:
+        # TMDb ID varsa direkt fetch
         try:
-            tmd = tmdb.fetch_movie(meta["tmdb_id"]) or {}
-            print(f"[debug] TMDb data fetched")
+            tmd = tmdb.fetch_movie(tmdb_id) or {}
+            print(f"[debug] TMDb data fetched via ID")
         except Exception as e:
             print(f"[warn] tmdb.fetch_movie failed: {e}")
-
-    # OMDb verileri
-    omd = {}
-    if meta.get("imdb_id"):
+    
+    if not tmd:
+        # TMDb ID yoksa, başka yollarla dene
+        search_title = None
+        search_year = year_from_meta
+        
+        # Öncelik 1: Letterboxd'dan gelen title
+        if title_from_meta:
+            search_title = title_from_meta
+        
+        # Öncelik 2: Notion'daki sayfa adı
+        if not search_title:
+            page_title = nz.get_page_title(props)
+            if page_title and page_title.lower() not in ["new page", "untitled", ""]:
+                search_title = page_title
+        
+        # Öncelik 3: Letterboxd URL'inden çıkar
+        if not search_title:
+            search_title = _extract_title_from_letterboxd_url(lb_url)
+        
+        if search_title:
+            print(f"[info] Searching TMDb for: {search_title}")
+            try:
+                tmd = tmdb.fetch_by_title(search_title, year=search_year) or {}
+                if tmd:
+                    print(f"[debug] TMDb data fetched via title search")
+            except Exception as e:
+                print(f"[warn] tmdb.fetch_by_title failed: {e}")
+    
+    # OMDb verileri (IMDb ID varsa)
+    final_imdb_id = imdb_id or tmd.get("imdb_id")
+    if final_imdb_id:
         try:
-            omd = omdb.fetch_by_imdb(meta["imdb_id"]) or {}
+            omd = omdb.fetch_by_imdb(final_imdb_id) or {}
             print(f"[debug] OMDb data fetched")
         except Exception as e:
             print(f"[warn] omdb.fetch_by_imdb failed: {e}")
+    
+    # Hiç veri bulunamadıysa çık
+    if not tmd and not omd:
+        print(f"[warn] No movie data found, skipping")
+        return payload
 
     # Title (sayfa adı)
     if _need(props, "name"):
         current_title = nz.get_page_title(props) or ""
         if (not current_title) or current_title.lower() == "new page":
-            if meta.get("title"):
-                payload[NOTION_COLS["name"]] = nz._title(meta["title"])
-                print(f"[debug] Setting title: {meta['title']}")
+            title = title_from_meta or tmd.get("title") or omd.get("Title")
+            if title:
+                payload[NOTION_COLS["name"]] = nz._title(title)
+                print(f"[debug] Setting title: {title}")
 
     # Year
     if _need(props, "year"):
-        y = meta.get("year") or tmd.get("year") or omd.get("Year")
+        y = year_from_meta or tmd.get("year") or omd.get("Year")
         if y:
             try:
                 year_int = int(str(y)[:4])
@@ -165,9 +227,10 @@ def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]
 
     # Trailer
     if _need(props, "trailer_url"):
-        if meta.get("tmdb_id"):
+        tmdb_id_for_trailer = meta.get("tmdb_id") or tmd.get("id")
+        if tmdb_id_for_trailer:
             try:
-                videos = tmdb._get(f"{tmdb.BASE}/movie/{meta['tmdb_id']}/videos")
+                videos = tmdb._get(f"{tmdb.BASE}/movie/{tmdb_id_for_trailer}/videos")
                 if videos and videos.get("results"):
                     for vid in videos["results"]:
                         if vid.get("type") == "Trailer" and vid.get("site") == "YouTube":
@@ -193,9 +256,10 @@ def build_payload_for_page(props: Dict[str, Any], lb_url: str) -> Dict[str, Any]
     
     # Streaming (TR platformları + MUBI global)
     if _need(props, "streaming"):
-        if meta.get("tmdb_id"):
+        tmdb_id_for_streaming = meta.get("tmdb_id") or tmd.get("id")
+        if tmdb_id_for_streaming:
             try:
-                streaming_data = tmdb.get_streaming_availability(meta["tmdb_id"])
+                streaming_data = tmdb.get_streaming_availability(tmdb_id_for_streaming)
                 if streaming_data:
                     payload[NOTION_COLS["streaming"]] = nz._multi(streaming_data)
                     print(f"[debug] Setting streaming: {streaming_data}")
@@ -223,8 +287,16 @@ def mode_refresh_mubi(args) -> int:
             continue
         
         try:
+            # TMDb ID'yi bul
             meta = lb.parse(lb_url) or {}
             tmdb_id = meta.get("tmdb_id")
+            
+            # Letterboxd başarısızsa title ile ara
+            if not tmdb_id:
+                search_title = meta.get("title") or nz.get_page_title(props) or _extract_title_from_letterboxd_url(lb_url)
+                if search_title:
+                    tmd = tmdb.fetch_by_title(search_title) or {}
+                    tmdb_id = tmd.get("id")
             
             if not tmdb_id:
                 print(f"[{idx}] No TMDb ID for {lb_url}")
