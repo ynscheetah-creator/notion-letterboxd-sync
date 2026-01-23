@@ -1,15 +1,6 @@
-# Notion × Letterboxd Sync dependencies
-
-# Notion API client
-notion-client>=2.0.0
-
-# HTTP requests with Cloudflare bypass
-cloudscraper>=1.2.71
-requests>=2.31.0
-
-# HTML parsing
-beautifulsoup4>=4.12.0
-lxml>=5.0.0
-
-# Environment variables
-python-dotenv>=1.0.0
+notion-client
+requests
+beautifulsoup4
+lxml
+python-dotenv
+cloudscraper
